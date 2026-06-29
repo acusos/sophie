@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Sophie</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Sophie</h1>
+            <div class="status-bar" id="statusBar">Ready</div>
+        </div>
+
+        <div class="message-area" id="messageArea">
+            <div class="message assistant">
+                <div class="avatar">S</div>
+                <div class="bubble">Hi, I'm Sophie! Hold the button below and speak.</div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <button id="pttBtn" class="ptt-button" aria-label="Hold to speak">
+                <svg class="mic-icon" viewBox="0 0 24 24" fill="currentColor" width="28" height="28">
+                    <path d="M12 1a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V5a4 4 0 0 0-4-4z"/>
+                    <path d="M19 11v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2"/>
+                    <line x1="12" y1="18" x2="12" y2="23" stroke="currentColor" stroke-width="2"/>
+                </svg>
+                <span class="ptt-label">Hold to Speak</span>
+            </button>
+        </div>
+
+        <div class="waveform" id="waveform">
+            <canvas id="canvas"></canvas>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

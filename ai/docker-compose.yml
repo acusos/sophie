@@ -1,0 +1,26 @@
+# ── Sophie STT Service ──
+# Deploy to: ai (192.168.20.116)
+
+services:
+  faster-whisper:
+    build: ./faster-whisper
+    ports:
+      - "8091:8091"
+    environment:
+      WHISPER_MODEL: "large-v3-turbo"
+      WHISPER_DEVICE: "cuda"
+      WHISPER_COMPUTE: "float16"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    volumes:
+      # Cache Whisper models so they aren't re-downloaded on rebuild
+      - whisper-cache:/root/.cache/huggingface
+
+volumes:
+  whisper-cache:
