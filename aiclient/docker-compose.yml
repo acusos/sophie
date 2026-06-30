@@ -12,7 +12,7 @@ services:
       LLAMA_URL: "http://192.168.20.116:8080"
       STT_URL: "http://192.168.20.116:8091"
       TTS_URL: "http://127.0.0.1:8092"
-      MEMORY_API_URL: "http://192.168.20.116:8002"
+      MEMORY_API_URL: "http://192.168.20.116:8000"
       OPENWAKEWORD_URL: "http://127.0.0.1:8093"
     depends_on:
       - piper-tts

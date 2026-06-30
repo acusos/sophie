@@ -21,7 +21,7 @@ LLAMA_URL = os.getenv("LLAMA_URL", "http://192.168.20.116:8080")
 LLAMA_KEY = os.getenv("LLAMA_KEY", "")
 STT_URL = os.getenv("STT_URL", "http://192.168.20.116:8091")
 TTS_URL = os.getenv("TTS_URL", "http://127.0.0.1:8092")
-MEMORY_API_URL = os.getenv("MEMORY_API_URL", "http://192.168.20.116:8002")
+MEMORY_API_URL = os.getenv("MEMORY_API_URL", "http://192.168.20.116:8000")
 QDRANT_URL = os.getenv("QDRANT_URL", "http://192.168.20.116:6333")
 OPENWAKEWORD_URL = os.getenv("OPENWAKEWORD_URL", "http://127.0.0.1:8093")
 HA_URL = os.getenv("HA_URL", "")
@@ -222,35 +222,31 @@ async def ha_action(action: str, entity_id: str, value: str = "") -> str:
 # ── Tool: Memory ───────────────────────────────────────────────────────────
 async def memory_search(query: str, limit: int = 5) -> str:
     """Search the memory service."""
-    try:
-        resp = await http_client.post(
-            f"{MEMORY_API_URL}/search",
-            json={"query": query, "limit": limit},
-            timeout=5.0,
-        )
-        if resp.status_code != 200:
-            return "Memory search failed"
-        results = resp.json()
-        return "\n".join(f"- {r.get('content', '')}" for r in results[:limit] if r.get("content"))
-    except Exception:
-        return "Memory service unavailable"
-
-
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.post(
+                f"{MEMORY_API_URL}/api/search",
+                json={"query": query, "limit": limit},
+            )
+            if resp.status_code != 200:
+                return "Memory search failed"
+            results = resp.json()
+            return "\n".join(f"- {r.get('content', '')}" for r in results[:limit] if r.get("content"))
+        except Exception:
+            return "Memory service unavailable"
+    
 async def memory_store(text: str, tags: list[str] = None) -> str:
     """Store a fact in memory."""
-    try:
-        resp = await http_client.post(
-            f"{MEMORY_API_URL}/store",
-            json={"text": text, "tags": tags or []},
-            timeout=5.0,
-        )
-        return "Stored" if resp.status_code == 200 else resp.text[:256]
-    except Exception:
-        return "Memory service unavailable"
-
-
-# ── Routes ─────────────────────────────────────────────────────────────────
-@app.get("/")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            resp = await client.post(
+                f"{MEMORY_API_URL}/api/store",
+                json={"text": text, "tags": tags or []},
+            )
+            return "Stored" if resp.status_code == 200 else resp.text[:256]
+        except Exception:
+            return "Memory service unavailable"
+    
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
@@ -264,7 +260,7 @@ async def chat(req: ChatRequest):
     # Retrieve relevant memory for this conversation
     try:
         resp = await http_client.post(
-            f"{MEMORY_API_URL}/search",
+            f"{MEMORY_API_URL}/api/search",
             json={"query": req.message, "limit": 5},
             timeout=5.0,
         )
@@ -328,7 +324,7 @@ async def chat(req: ChatRequest):
             # Store conversation in memory service for long-term recall
             try:
                 await http_client.post(
-                    f"{MEMORY_API_URL}/store",
+                    f"{MEMORY_API_URL}/api/store",
                     json={
                         "user_message": req.message,
                         "assistant_reply": full_reply,
@@ -622,6 +618,20 @@ async def clear_alerts():
     alert_queue.clear()
     return {"cleared": True}
 
+
+
+@app.get("/debug/memory")
+async def debug_memory():
+    """Debug endpoint for memory service."""
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{MEMORY_API_URL}/api/search",
+                json={"query": "test", "limit": 5},
+            )
+            return {"status": "success", "code": resp.status_code, "data": resp.json()}
+    except Exception as e:
+        return {"status": "error", "type": type(e).__name__, "message": str(e)}
 
 @app.get("/health")
 async def health():
