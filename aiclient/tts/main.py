@@ -18,14 +18,14 @@ def synthesize(text: str) -> bytes:
     cmd = [
         "piper",
         "--model", ONNX_MODEL_PATH,
-        "--output-raw",
+        
         "--output_file", "-",
         "--speed", str(PIPE_SPEED),
-        "--sentence_split",
+        
     ]
     proc = subprocess.run(
         cmd,
-        input=text,
+        input=text.encode(),
         capture_output=True,
         check=True,
     )

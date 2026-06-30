@@ -1,14 +1,16 @@
 /* ── Sophie Web UI ─────────────────────────────────────────── */
 
-const messageArea = document.getElementById("messageArea");
+const messageArea = document.getElementById("messageArea"); 
 const statusBar = document.getElementById("statusBar");
 const pttBtn = document.getElementById("pttBtn");
+const textInput = document.getElementById("textInput");
+const sendBtn = document.getElementById("sendBtn");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
 let sessionId = sessionStorage.getItem("sophie_session") || "";
 if (!sessionId) {
-    sessionId = crypto.randomUUID();
+    sessionId = Math.random().toString(36).substring(2, 10);
     sessionStorage.setItem("sophie_session", sessionId);
 }
 
@@ -274,7 +276,33 @@ function stopRecording() {
 }
 
 /* ── Mouse events ──────────────────────────────────────────── */
-pttBtn.addEventListener("mousedown", startRecording);
+console.log("Setting up PTT handlers");
+pttBtn.addEventListener("click", (e) => { e.preventDefault(); startRecording(); setTimeout(stopRecording, 2000); });
+console.log("Setting up PTT handlers");
+pttBtn.addEventListener("click", (e) => { e.preventDefault(); startRecording(); setTimeout(stopRecording, 2000); });
+pttBtn.addEventListener("mousedown", (e) => { pttBtn.style.background = "red"; startRecording(); });
+
+/* ── Text chat ──────────────────────────────────────────────── */
+async function sendTextMessage() {
+    const userText = textInput.value.trim();
+    if (!userText) return;
+    textInput.value = "";
+    addMessage("user", userText);
+
+    const bubble = addStreamingMessage("assistant");
+    const reply = await chatStream(userText, bubble);
+
+    if (reply && reply.trim()) {
+        await speak(reply);
+    } else {
+        setStatus("Ready");
+    }
+}
+
+sendBtn.addEventListener("click", sendTextMessage);
+textInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendTextMessage();
+});
 pttBtn.addEventListener("mouseup", stopRecording);
 pttBtn.addEventListener("mouseleave", () => {
     if (isRecording) stopRecording();

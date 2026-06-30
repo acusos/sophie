@@ -169,3 +169,51 @@ body {
 /* ── Scrollbar ─────────────────────────────────────────────── */
 .message-area::-webkit-scrollbar { width: 4px; }
 .message-area::-webkit-scrollbar-thumb { background: #2a2a36; border-radius: 2px; }
+
+/* ── Text input ─────────────────────────────────────────────── */
+.text-input-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: center;
+}
+
+.text-input {
+    flex: 1;
+    padding: 12px 16px;
+    border: 2px solid rgba(192, 132, 252, 0.3);
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.05);
+    color: #fff;
+    font-size: 16px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.text-input:focus {
+    border-color: rgba(192, 132, 252, 0.8);
+}
+
+.text-input::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.send-button {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 24px;
+    background: #c084fc;
+    color: #000;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.1s;
+}
+
+.send-button:hover {
+    background: #a855f7;
+}
+
+.send-button:active {
+    transform: scale(0.95);
+}

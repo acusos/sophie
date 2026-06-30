@@ -8,9 +8,10 @@ RUN apt-get update && \
     "uvicorn[standard]==0.34.2" \
     piper-tts==1.4.2
 
-# Download the amy voice model (female English) - direct onnx file
+# Download the amy voice model (female English)
 RUN mkdir -p /models/amy && \
-    wget -qO /models/amy/en_US-amy-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx
+    wget -qO /models/amy/en_US-amy-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx && \
+    wget -qO /models/amy/en_US-amy-medium.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx.json
 
 COPY main.py /app/main.py
 WORKDIR /app

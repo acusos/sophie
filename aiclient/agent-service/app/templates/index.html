@@ -18,11 +18,15 @@
         <div class="message-area" id="messageArea">
             <div class="message assistant">
                 <div class="avatar">S</div>
-                <div class="bubble">Hi, I'm Sophie! Hold the button below and speak.</div>
+                <div class="bubble">Hi, I'm Sophie! You can type a message below, or hold the button to speak (requires HTTPS/mic access).</div>
             </div>
         </div>
 
         <div class="input-area">
+            <div class="text-input-row">
+                <input type="text" id="textInput" placeholder="Type a message..." class="text-input" />
+                <button id="sendBtn" class="send-button">Send</button>
+            </div>
             <button id="pttBtn" class="ptt-button" aria-label="Hold to speak">
                 <svg class="mic-icon" viewBox="0 0 24 24" fill="currentColor" width="28" height="28">
                     <path d="M12 1a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V5a4 4 0 0 0-4-4z"/>

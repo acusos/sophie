@@ -7,6 +7,7 @@ services:
     build: ./agent-service
     ports:
       - "8090:8090"
+    network_mode: host
     environment:
       LLAMA_URL: "http://192.168.20.116:8080"
       STT_URL: "http://192.168.20.116:8091"
@@ -20,8 +21,8 @@ services:
   # Piper TTS — local, fast speech synthesis
   piper-tts:
     build: ./tts
-    expose:
-      - "8092"
+    ports:
+      - "8092:8092"
     environment:
       PIPER_MODEL: "/models/amy/en_US-amy-medium.onnx"
     restart: unless-stopped
@@ -29,13 +30,13 @@ services:
   # openWakeWord — wake word detection ("sophie")
   openwakeword:
     build: ./openwakeword
-    expose:
-      - "8093"
+    ports:
+      - "8093:8093"
     environment:
       WAKE_WORD: "sophie"
       WAKE_THRESHOLD: "0.6"
     devices:
-      - /dev/snd:/dev/snd  # For microphone access
+      - /dev/snd:/dev/snd
     restart: unless-stopped
 
   # Desktop Voice Client — continuous listening loop
