@@ -1,5 +1,6 @@
 import os
 import asyncio
+import re
 import json
 import base64
 import uuid
@@ -28,6 +29,11 @@ OPENWAKEWORD_URL = os.getenv("OPENWAKEWORD_URL", "http://127.0.0.1:8093")
 HA_URL = os.getenv("HA_URL", "")
 HA_TOKEN = os.getenv("HA_TOKEN", "")
 MAX_TOOL_OUTPUT = 4096
+
+def normalize_for_tts(text: str) -> str:
+    """Replace X.0 with X so Piper doesn't say point zero."""
+    return re.sub(r'\b(\d+)\.0\b', r'\1', text)
+
 
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
@@ -400,9 +406,10 @@ async def stt_file(audio: UploadFile = File(...)):
 @app.post("/tts")
 async def tts(req: TTSRequest):
     """Forward text to piper TTS service, return audio stream."""
+    cleaned_text = normalize_for_tts(req.text)
     resp = await http_client.post(
         f"{TTS_URL}/tts",
-        json={"text": req.text},
+        json={"text": cleaned_text},
     )
     if resp.status_code != 200:
         raise HTTPException(status_code=502, detail=resp.text)
@@ -676,9 +683,10 @@ async def voice_endpoint(audio: UploadFile = File(...)):
             return JSONResponse({"error": "No reply"}, status_code=500)
 
         # 3. TTS
+        cleaned_reply = normalize_for_tts(reply)
         resp = await http_client.post(
             f"{TTS_URL}/tts",
-            json={"text": reply},
+            json={"text": cleaned_reply},
         )
         if resp.status_code != 200:
             return JSONResponse({"error": resp.text}, status_code=502)

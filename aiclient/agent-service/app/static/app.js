@@ -111,6 +111,10 @@ function addStreamingMessage(role) {
 /* ── TTS: text-to-speech via /tts ─────────────────────────── */
 async function speak(text) {
     if (!text || !text.trim()) return;
+    console.log("[SPEAK] text:", JSON.stringify(text));
+    if (window.speechSynthesis) {
+        console.log("[SPEAK] speechSynthesis active?", !!speechSynthesis.speaking);
+    }
     setStatus("Speaking", "speaking");
     try {
         const resp = await fetch("/tts", {
@@ -300,8 +304,6 @@ async function processRecognizedSpeech(text) {
 }
 
 /* ── Mouse events ──────────────────────────────────────────── */
-console.log("Setting up PTT handlers");
-pttBtn.addEventListener("click", (e) => { e.preventDefault(); startRecording(); setTimeout(stopRecording, 2000); });
 console.log("Setting up PTT handlers");
 pttBtn.addEventListener("click", (e) => { e.preventDefault(); startRecording(); setTimeout(stopRecording, 2000); });
 pttBtn.addEventListener("mousedown", (e) => { pttBtn.style.background = "red"; startRecording(); });

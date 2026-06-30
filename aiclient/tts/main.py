@@ -10,7 +10,6 @@ MODEL_PATH = os.getenv("PIPER_MODEL", "/models/amy/en_US-amy-medium.onnx")
 ONNX_MODEL_PATH = MODEL_PATH
 VOICE_DIR = "/models/amy"
 
-PIPE_SPEED = float(os.getenv("PIPER_SPEED", "1.0"))
 
 
 def synthesize(text: str) -> bytes:
@@ -20,7 +19,6 @@ def synthesize(text: str) -> bytes:
         "--model", ONNX_MODEL_PATH,
         
         "--output_file", "-",
-        "--speed", str(PIPE_SPEED),
         
     ]
     proc = subprocess.run(
