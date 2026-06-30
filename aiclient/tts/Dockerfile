@@ -6,13 +6,11 @@ RUN apt-get update && \
     python3 -m pip install --break-system-packages \
     fastapi==0.115.8 \
     "uvicorn[standard]==0.34.2" \
-    piper-tts==1.2.2
+    piper-tts==1.4.2
 
-# Download the amy voice model (female English)
-RUN wget -qO /tmp/amy.zip https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.zip && \
-    mkdir -p /models/amy && \
-    unzip -o /tmp/amy.zip -d /models/amy && \
-    rm -f /tmp/amy.zip
+# Download the amy voice model (female English) - direct onnx file
+RUN mkdir -p /models/amy && \
+    wget -qO /models/amy/en_US-amy-medium.onnx https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/en/en_US/amy/medium/en_US-amy-medium.onnx
 
 COPY main.py /app/main.py
 WORKDIR /app

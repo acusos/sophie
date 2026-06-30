@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.6.3-cudnn9-runtime-ubuntu24.04
+FROM nvidia/cuda:12.8.0-runtime-ubuntu24.04
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends python3 python3-pip python3-venv ffmpeg && \
@@ -14,7 +14,9 @@ RUN pip install --no-cache-dir \
     "uvicorn[standard]==0.34.2" \
     pydub==0.25.1 \
     soundfile==0.13.1 \
-    numpy==2.2.3
+    numpy==2.2.3 \
+    requests==2.32.3 \
+    python-multipart==0.0.20
 
 WORKDIR /app
 COPY main.py /app/main.py

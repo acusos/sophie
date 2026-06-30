@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir \
     fastapi==0.115.8 \
     "uvicorn[standard]==0.34.2" \
     sounddevice==0.5.1 \
-    pyaudio==0.2.15
+    pyaudio==0.2.14
 
 COPY main.py /app/main.py
 

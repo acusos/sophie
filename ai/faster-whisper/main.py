@@ -24,12 +24,16 @@ class STTResponse(BaseModel):
     segments: list[dict] = []
 
 
+class STTRequest(BaseModel):
+    audio_b64: str
+    language: str = "en"
+
+
 @app.post("/transcribe", response_model=STTResponse)
 async def transcribe(
     audio: UploadFile = File(...),
     language: str = Form("en"),
 ):
-    # Save uploaded audio to a temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
         f.write(await audio.read())
         path = f.name
@@ -59,17 +63,16 @@ async def transcribe(
 
 @app.post("/transcribe-b64", response_model=STTResponse)
 async def transcribe_b64(
-    audio_b64: str,
-    language: str = "en",
+    req: STTRequest,
 ):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-        f.write(base64.b64decode(audio_b64))
+        f.write(base64.b64decode(req.audio_b64))
         path = f.name
 
     try:
         segments, info = model.transcribe(
             path,
-            language=language,
+            language=req.language,
             beam_size=5,
             vad_filter=True,
         )

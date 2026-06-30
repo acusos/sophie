@@ -8,7 +8,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir \
     sounddevice==0.5.1 \
-    pyaudio==0.2.15 \
+    pyaudio==0.2.14 \
     requests==2.32.3 \
     numpy==2.2.3 \
     pydub==0.25.1
