@@ -1,6 +1,7 @@
 import os
 import asyncio
 import json
+import base64
 import uuid
 import time
 import subprocess
@@ -247,6 +248,7 @@ async def memory_store(text: str, tags: list[str] = None) -> str:
         except Exception:
             return "Memory service unavailable"
     
+@app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
@@ -632,6 +634,62 @@ async def debug_memory():
             return {"status": "success", "code": resp.status_code, "data": resp.json()}
     except Exception as e:
         return {"status": "error", "type": type(e).__name__, "message": str(e)}
+
+
+@app.post("/voice")
+async def voice_endpoint(audio: UploadFile = File(...)):
+    """Accept audio, transcribe, chat, return TTS audio."""
+    try:
+        audio_bytes = await audio.read()
+        print(f"[VOICE] Received {len(audio_bytes)} bytes from {audio.filename}")
+        
+        # 1. Transcribe - send as base64 via /stt-b64 or as file
+        resp = await http_client.post(
+            f"{STT_URL}/transcribe-b64",
+            json={"audio_b64": base64.b64encode(audio_bytes).decode(), "language": "en"},
+            headers={"Content-Type": "application/json"},
+        )
+        print(f"[VOICE] STT response: {resp.status_code} {resp.text[:200]}")
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        stt_data = resp.json()
+        user_text = stt_data.get("text", "")
+        if not user_text:
+            return JSONResponse({"error": "No speech detected"}, status_code=400)
+
+        # 2. Chat (blocking)
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 2048,
+            },
+            headers=LLAMA_HEADERS,
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        reply = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        if not reply:
+            return JSONResponse({"error": "No reply"}, status_code=500)
+
+        # 3. TTS
+        resp = await http_client.post(
+            f"{TTS_URL}/tts",
+            json={"text": reply},
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+
+        return StreamingResponse(
+            iter([resp.content]),
+            media_type="audio/wav",
+            headers={"X-Audio-Length": str(len(resp.content))},
+        )
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/health")
 async def health():

@@ -216,63 +216,87 @@ async function runConversation(userAudioBlob) {
 }
 
 /* ── PTT Button (hold to speak) ────────────────────────────── */
+let recognition = null;
+let currentTranscript = "";
+
 async function startRecording() {
     if (isRecording) return;
 
-    // Resume AudioContext (required on iOS)
-    if (audioCtx && audioCtx.state === "suspended") {
-        await audioCtx.resume();
-    }
-
     try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                sampleRate: 16000,
-            },
-        });
+        // Use Web Speech API for voice recognition
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            setStatus("Voice recognition not supported", "error");
+            return;
+        }
 
-        analyser = audioCtx.createAnalyser();
-        const source = audioCtx.createMediaStreamSource(stream);
-        source.connect(analyser);
-        drawWaveform();
+        recognition = new SpeechRecognition();
+        recognition.lang = "en-US";
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+        recognition.continuous = false;
 
-        mediaRecorder = new MediaRecorder(stream, {
-            mimeType: "audio/webm;codecs=opus",
-        });
-
-        chunks = [];
-        mediaRecorder.ondataavailable = (e) => {
-            if (e.data.size > 0) chunks.push(e.data);
+        recognition.onstart = () => {
+            isRecording = true;
+            pttBtn.classList.add("active");
+            setStatus("Listening…", "listening");
+            drawWaveform();
         };
 
-        mediaRecorder.onstop = () => {
-            stream.getTracks().forEach((t) => t.stop());
-            cancelAnimationFrame(animFrame);
-            analyser = null;
-            drawIdle();
-            const blob = new Blob(chunks, { type: "audio/webm" });
-            chunks = [];
-            runConversation(blob);
+        recognition.onresult = (event) => {
+            const transcript = event.results[0][0].transcript;
+            console.log("Speech recognized:", transcript);
+            currentTranscript = transcript;
+            console.log("Speech recognized:", transcript);
+            stopRecording();
+            // Process the recognized speech
+            processRecognizedSpeech(transcript);
         };
 
-        mediaRecorder.start(100);
-        isRecording = true;
-        pttBtn.classList.add("active");
-        setStatus("Listening…", "listening");
+        recognition.onerror = (event) => {
+            console.error("Speech recognition error:", event.error);
+            if (event.error === "no-speech") {
+                setStatus("No speech detected", "error");
+            } else {
+                setStatus("Speech error: " + event.error, "error");
+            }
+            stopRecording();
+        };
+
+        recognition.onend = () => {
+            if (!currentTranscript && !isRecording) {
+                setStatus("Ready");
+            }
+        };
+
+        recognition.start();
     } catch (err) {
-        console.error("Mic error:", err);
-        setStatus("Mic access denied", "error");
+        console.error("Speech recognition error:", err);
+        setStatus("Speech recognition not available", "error");
     }
 }
 
 function stopRecording() {
-    if (!isRecording || !mediaRecorder) return;
-    mediaRecorder.stop();
+    if (recognition) {
+        recognition.stop();
+        recognition = null;
+    }
     isRecording = false;
     pttBtn.classList.remove("active");
+}
+
+async function processRecognizedSpeech(text) {
+    if (!text || !text.trim()) return;
+
+    addMessage("user", text);
+    const bubble = addStreamingMessage("assistant");
+    const reply = await chatStream(text, bubble);
+
+    if (reply && reply.trim()) {
+        await speak(reply);
+    } else {
+        setStatus("Ready");
+    }
 }
 
 /* ── Mouse events ──────────────────────────────────────────── */
