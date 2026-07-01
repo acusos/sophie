@@ -2,26 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="format-detection" content="telephone=no">
     <title>Sophie</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
-<body>
+<body touch-action="none">
     <div class="container">
         <div class="header">
             <h1>Sophie</h1>
             <div class="status-bar" id="statusBar">Ready</div>
         </div>
-
         <div class="message-area" id="messageArea">
             <div class="message assistant">
                 <div class="avatar">S</div>
-                <div class="bubble">Hi, I'm Sophie! You can type a message below, or hold the button to speak (requires HTTPS/mic access).</div>
+                <div class="bubble">Hi, I'm Sophie! You can type a message below, or hold the microphone button to speak.</div>
             </div>
         </div>
-
         <div class="input-area">
             <div class="text-input-row">
                 <input type="text" id="textInput" placeholder="Type a message..." class="text-input" />
@@ -36,12 +35,10 @@
                 <span class="ptt-label">Hold to Speak</span>
             </button>
         </div>
-
         <div class="waveform" id="waveform">
             <canvas id="canvas"></canvas>
         </div>
     </div>
-
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=4"></script>
 </body>
 </html>

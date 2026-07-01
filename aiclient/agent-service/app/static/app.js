@@ -1,6 +1,6 @@
 /* ── Sophie Web UI ─────────────────────────────────────────── */
 
-const messageArea = document.getElementById("messageArea"); 
+const messageArea = document.getElementById("messageArea");
 const statusBar = document.getElementById("statusBar");
 const pttBtn = document.getElementById("pttBtn");
 const textInput = document.getElementById("textInput");
@@ -18,10 +18,10 @@ let audioCtx = null;
 let mediaRecorder = null;
 let chunks = [];
 let isRecording = false;
-let analyser = null;
 let animFrame = null;
+let audioStream = null;
+let recordingTimer = null;
 
-/* ── Canvas waveform ───────────────────────────────────────── */
 function resizeCanvas() {
     canvas.width = canvas.offsetWidth * (window.devicePixelRatio || 1);
     canvas.height = canvas.offsetHeight * (window.devicePixelRatio || 1);
@@ -40,19 +40,23 @@ function drawIdle() {
 }
 drawIdle();
 
-function drawWaveform() {
-    if (!analyser) return;
-    analyser.fftSize = 256;
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
+let analyser = null;
 
+function startAnalyser(stream) {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
     function tick() {
+        if (!analyser || !isRecording) return;
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
         analyser.getByteTimeDomainData(dataArray);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.lineWidth = 2;
         ctx.strokeStyle = "#c084fc";
         ctx.beginPath();
-
         const sliceWidth = canvas.width / bufferLength;
         let x = 0;
         for (let i = 0; i < bufferLength; i++) {
@@ -69,13 +73,17 @@ function drawWaveform() {
     tick();
 }
 
-/* ── Status helper ─────────────────────────────────────────── */
+function stopAnalyser() {
+    if (animFrame) { cancelAnimationFrame(animFrame); animFrame = null; }
+    analyser = null;
+    drawIdle();
+}
+
 function setStatus(text, className) {
     statusBar.textContent = text;
     statusBar.className = "status-bar " + (className || "");
 }
 
-/* ── Messages ──────────────────────────────────────────────── */
 function addMessage(role, text) {
     const msg = document.createElement("div");
     msg.className = `message ${role}`;
@@ -108,23 +116,20 @@ function addStreamingMessage(role) {
     return bubble;
 }
 
-/* ── TTS: text-to-speech via /tts ─────────────────────────── */
 async function speak(text) {
     if (!text || !text.trim()) return;
     console.log("[SPEAK] text:", JSON.stringify(text));
-    if (window.speechSynthesis) {
-        console.log("[SPEAK] speechSynthesis active?", !!speechSynthesis.speaking);
-    }
     setStatus("Speaking", "speaking");
     try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") await audioCtx.resume();
         const resp = await fetch("/tts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text }),
         });
-        if (!resp.ok) return;
+        if (!resp.ok) throw new Error("TTS HTTP " + resp.status);
         const buffer = await resp.arrayBuffer();
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         const audioBuffer = await audioCtx.decodeAudioData(buffer);
         const source = audioCtx.createBufferSource();
         source.buffer = audioBuffer;
@@ -137,23 +142,19 @@ async function speak(text) {
     }
 }
 
-/* ── STT: audio-to-text via /stt/file ─────────────────────── */
 async function transcribe(blob) {
     setStatus("Transcribing…", "thinking");
     const formData = new FormData();
-    formData.append("audio", blob, "audio.wav");
+    formData.append("audio", blob, "audio.webm");
     const resp = await fetch("/stt/file", {
         method: "POST",
         body: formData,
     });
-    if (!resp.ok) {
-        throw new Error("STT failed: " + resp.statusText);
-    }
+    if (!resp.ok) throw new Error("STT failed: " + resp.statusText);
     const data = await resp.json();
     return data.text;
 }
 
-/* ── Chat: stream response ─────────────────────────────────── */
 async function chatStream(userText, bubble) {
     setStatus("Thinking…", "thinking");
     const resp = await fetch("/chat", {
@@ -162,11 +163,9 @@ async function chatStream(userText, bubble) {
         body: JSON.stringify({ message: userText, session_id: sessionId }),
     });
     if (!resp.ok) throw new Error("Chat failed: " + resp.statusText);
-
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let fullText = "";
-
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -180,144 +179,105 @@ async function chatStream(userText, bubble) {
                     bubble.textContent = fullText;
                     messageArea.scrollTop = messageArea.scrollHeight;
                 }
-                if (data.error) {
-                    throw new Error(data.error);
-                }
+                if (data.error) throw new Error(data.error);
             } catch (e) {
                 if (!e.message.includes("Unexpected token")) throw e;
             }
         }
     }
-
     return fullText;
 }
 
-/* ── Main conversation loop ────────────────────────────────── */
 async function runConversation(userAudioBlob) {
     try {
-        // 1. Transcribe
         const userText = await transcribe(userAudioBlob);
         if (!userText || !userText.trim()) {
             setStatus("Ready");
             return;
         }
         addMessage("user", userText);
-
-        // 2. Chat stream
         const bubble = addStreamingMessage("assistant");
         const reply = await chatStream(userText, bubble);
-
-        // 3. Speak
         if (reply && reply.trim()) {
             await speak(reply);
         } else {
             setStatus("Ready");
         }
     } catch (err) {
-        console.error(err);
+        console.error("Conversation error:", err);
         setStatus("Error: " + err.message, "error");
     }
 }
 
-/* ── PTT Button (hold to speak) ────────────────────────────── */
-let recognition = null;
-let currentTranscript = "";
-
 async function startRecording() {
     if (isRecording) return;
-
     try {
-        // Use Web Speech API for voice recognition
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            setStatus("Voice recognition not supported", "error");
-            return;
+        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        chunks = [];
+        const mimeTypes = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/ogg;codecs=opus",
+            "audio/mp4",
+        ];
+        let selectedMime = "";
+        for (const m of mimeTypes) {
+            if (MediaRecorder.isTypeSupported(m)) { selectedMime = m; break; }
         }
-
-        recognition = new SpeechRecognition();
-        recognition.lang = "en-US";
-        recognition.interimResults = false;
-        recognition.maxAlternatives = 1;
-        recognition.continuous = false;
-
-        recognition.onstart = () => {
-            isRecording = true;
-            pttBtn.classList.add("active");
-            setStatus("Listening…", "listening");
-            drawWaveform();
+        mediaRecorder = new MediaRecorder(audioStream, selectedMime ? { mimeType: selectedMime } : {});
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) chunks.push(e.data);
         };
-
-        recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            console.log("Speech recognized:", transcript);
-            currentTranscript = transcript;
-            console.log("Speech recognized:", transcript);
-            stopRecording();
-            // Process the recognized speech
-            processRecognizedSpeech(transcript);
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(chunks, { type: selectedMime || "audio/webm" });
+            isRecording = false;
+            pttBtn.classList.remove("active");
+            pttBtn.querySelector(".ptt-label").textContent = "Hold to Speak";
+            stopAnalyser();
+            audioStream.getTracks().forEach(t => t.stop());
+            audioStream = null;
+            if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
+            runConversation(blob);
         };
-
-        recognition.onerror = (event) => {
-            console.error("Speech recognition error:", event.error);
-            if (event.error === "no-speech") {
-                setStatus("No speech detected", "error");
-            } else {
-                setStatus("Speech error: " + event.error, "error");
-            }
-            stopRecording();
-        };
-
-        recognition.onend = () => {
-            if (!currentTranscript && !isRecording) {
-                setStatus("Ready");
-            }
-        };
-
-        recognition.start();
+        mediaRecorder.start(100);
+        isRecording = true;
+        pttBtn.classList.add("active");
+        setStatus("Listening…", "listening");
+        startAnalyser(audioStream);
+        let elapsed = 0;
+        const label = pttBtn.querySelector(".ptt-label");
+        label.textContent = "Release";
+        recordingTimer = setInterval(() => {
+            elapsed++;
+            label.textContent = elapsed + "s";
+        }, 1000);
     } catch (err) {
-        console.error("Speech recognition error:", err);
-        setStatus("Speech recognition not available", "error");
+        console.error("Recording error:", err);
+        setStatus(err.name === "NotAllowedError" ? "Mic access denied" : "Mic error: " + err.name, "error");
     }
 }
 
 function stopRecording() {
-    if (recognition) {
-        recognition.stop();
-        recognition = null;
-    }
-    isRecording = false;
-    pttBtn.classList.remove("active");
+    if (!isRecording) return;
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+    mediaRecorder = null;
 }
 
-async function processRecognizedSpeech(text) {
-    if (!text || !text.trim()) return;
+pttBtn.addEventListener("touchstart", (e) => { e.preventDefault(); startRecording(); }, { passive: false });
+pttBtn.addEventListener("touchend", (e) => { e.preventDefault(); stopRecording(); }, { passive: false });
+pttBtn.addEventListener("touchcancel", (e) => { e.preventDefault(); stopRecording(); }, { passive: false });
 
-    addMessage("user", text);
-    const bubble = addStreamingMessage("assistant");
-    const reply = await chatStream(text, bubble);
+pttBtn.addEventListener("mousedown", (e) => { e.preventDefault(); startRecording(); });
+pttBtn.addEventListener("mouseup", (e) => { e.preventDefault(); stopRecording(); });
+pttBtn.addEventListener("mouseleave", () => { if (isRecording) stopRecording(); });
 
-    if (reply && reply.trim()) {
-        await speak(reply);
-    } else {
-        setStatus("Ready");
-    }
-}
-
-/* ── Mouse events ──────────────────────────────────────────── */
-console.log("Setting up PTT handlers");
-pttBtn.addEventListener("click", (e) => { e.preventDefault(); startRecording(); setTimeout(stopRecording, 2000); });
-pttBtn.addEventListener("mousedown", (e) => { pttBtn.style.background = "red"; startRecording(); });
-
-/* ── Text chat ──────────────────────────────────────────────── */
 async function sendTextMessage() {
     const userText = textInput.value.trim();
     if (!userText) return;
     textInput.value = "";
     addMessage("user", userText);
-
     const bubble = addStreamingMessage("assistant");
     const reply = await chatStream(userText, bubble);
-
     if (reply && reply.trim()) {
         await speak(reply);
     } else {
@@ -326,24 +286,4 @@ async function sendTextMessage() {
 }
 
 sendBtn.addEventListener("click", sendTextMessage);
-textInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") sendTextMessage();
-});
-pttBtn.addEventListener("mouseup", stopRecording);
-pttBtn.addEventListener("mouseleave", () => {
-    if (isRecording) stopRecording();
-});
-
-/* ── Touch events (mobile) ─────────────────────────────────── */
-pttBtn.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    startRecording();
-}, { passive: false });
-pttBtn.addEventListener("touchend", (e) => {
-    e.preventDefault();
-    stopRecording();
-}, { passive: false });
-pttBtn.addEventListener("touchcancel", (e) => {
-    e.preventDefault();
-    stopRecording();
-}, { passive: false });
+textInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendTextMessage(); });

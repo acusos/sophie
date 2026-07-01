@@ -12,9 +12,9 @@ from typing import AsyncGenerator
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Body
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Body, Query
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -33,7 +33,6 @@ MAX_TOOL_OUTPUT = 4096
 def normalize_for_tts(text: str) -> str:
     """Replace X.0 with X so Piper doesn't say point zero."""
     return re.sub(r'\b(\d+)\.0\b', r'\1', text)
-
 
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
@@ -69,61 +68,49 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = ""
 
-
 class ChatResponse(BaseModel):
     reply: str
     session_id: str
 
-
 class STTRequest(BaseModel):
     audio_b64: str
-
 
 class STTResponse(BaseModel):
     text: str
 
-
 class TTSRequest(BaseModel):
     text: str
-
 
 class MemoryStoreRequest(BaseModel):
     text: str
     tags: list[str] = []
     user_id: str = "default"
 
-
 class MemorySearchRequest(BaseModel):
     query: str
     limit: int = 5
-
 
 class ShellCommandRequest(BaseModel):
     command: str
     timeout: int = 30
 
-
 class DockerCommandRequest(BaseModel):
-    action: str  # ps, stop, start, rm, logs, pull
+    action: str
     name_or_id: str = ""
     flags: str = ""
 
-
 class FileOperationRequest(BaseModel):
-    action: str  # read, write, list
+    action: str
     path: str
     content: str = ""
 
-
 class HomeAssistantRequest(BaseModel):
-    action: str  # state, control
+    action: str
     entity_id: str = ""
     value: str = ""
 
-
 class TaskRequest(BaseModel):
     steps: list[str]
-
 
 class TaskStatusResponse(BaseModel):
     task_id: str
@@ -132,10 +119,8 @@ class TaskStatusResponse(BaseModel):
     status: str
     output: str = ""
 
-
 # ── Tool: Shell ────────────────────────────────────────────────────────────
 async def run_shell(cmd: str, timeout: int = 30) -> str:
-    """Execute a shell command and return output."""
     try:
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_shell(
@@ -145,9 +130,7 @@ async def run_shell(cmd: str, timeout: int = 30) -> str:
             ),
             timeout=2,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         result = stdout.decode().strip()
         if result and len(result) > MAX_TOOL_OUTPUT:
             result = result[:MAX_TOOL_OUTPUT] + "...\n(truncated)"
@@ -160,10 +143,8 @@ async def run_shell(cmd: str, timeout: int = 30) -> str:
     except Exception as e:
         return f"Error: {e}"
 
-
 # ── Tool: Docker ───────────────────────────────────────────────────────────
 async def docker_action(action: str, name: str = "", flags: str = "") -> str:
-    """Run a Docker command."""
     safe_actions = ["ps", "stop", "start", "rm", "logs", "pull", "inspect", "top", "images", "info"]
     if action not in safe_actions:
         return f"Denied: action '{action}' not in allowed list"
@@ -174,14 +155,11 @@ async def docker_action(action: str, name: str = "", flags: str = "") -> str:
         cmd += f" {shlex.quote(name)}"
     return await run_shell(cmd, timeout=15)
 
-
 # ── Tool: Filesystem ───────────────────────────────────────────────────────
 async def file_operation(action: str, path: str, content: str = "") -> str:
-    """Read, write, or list files. Only absolute paths under /home and /tmp."""
     p = Path(path).resolve()
     if not (str(p).startswith("/home") or str(p).startswith("/tmp")):
         return f"Denied: path must be under /home or /tmp, got {p}"
-
     try:
         if action == "list":
             if p.is_dir():
@@ -199,10 +177,8 @@ async def file_operation(action: str, path: str, content: str = "") -> str:
     except Exception as e:
         return f"Error: {e}"
 
-
 # ── Tool: Home Assistant ───────────────────────────────────────────────────
 async def ha_action(action: str, entity_id: str, value: str = "") -> str:
-    """Interact with Home Assistant."""
     if not HA_URL or not HA_TOKEN:
         return "Home Assistant not configured"
     url = f"{HA_URL}/api/states/{entity_id}" if action == "state" else f"{HA_URL}/api/services/switch/{value}"
@@ -225,10 +201,8 @@ async def ha_action(action: str, entity_id: str, value: str = "") -> str:
     except Exception as e:
         return f"HA error: {e}"
 
-
 # ── Tool: Memory ───────────────────────────────────────────────────────────
 async def memory_search(query: str, limit: int = 5) -> str:
-    """Search the memory service."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.post(
@@ -241,9 +215,8 @@ async def memory_search(query: str, limit: int = 5) -> str:
             return "\n".join(f"- {r.get('content', '')}" for r in results[:limit] if r.get("content"))
         except Exception:
             return "Memory service unavailable"
-    
+
 async def memory_store(text: str, tags: list[str] = None) -> str:
-    """Store a fact in memory."""
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.post(
@@ -253,11 +226,10 @@ async def memory_store(text: str, tags: list[str] = None) -> str:
             return "Stored" if resp.status_code == 200 else resp.text[:256]
         except Exception:
             return "Memory service unavailable"
-    
+
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
@@ -265,7 +237,7 @@ async def chat(req: ChatRequest):
     if session_id not in conversations:
         conversations[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    # Retrieve relevant memory for this conversation
+    # Retrieve relevant memory
     try:
         resp = await http_client.post(
             f"{MEMORY_API_URL}/api/search",
@@ -283,11 +255,10 @@ async def chat(req: ChatRequest):
                         f"\n\nRelevant memories:\n{memory_context}"
                     )
     except Exception:
-        pass  # Continue without memory if unavailable
+        pass
 
     conversations[session_id].append({"role": "user", "content": req.message})
 
-    # Stream from llama.cpp
     async def generate():
         payload = {
             "messages": conversations[session_id],
@@ -324,12 +295,10 @@ async def chat(req: ChatRequest):
                 except json.JSONDecodeError:
                     continue
 
-            # Save assistant reply
             conversations[session_id].append(
                 {"role": "assistant", "content": full_reply}
             )
 
-            # Store conversation in memory service for long-term recall
             try:
                 await http_client.post(
                     f"{MEMORY_API_URL}/api/store",
@@ -348,10 +317,8 @@ async def chat(req: ChatRequest):
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
-
 @app.post("/chat/blocking", response_model=ChatResponse)
 async def chat_blocking(req: ChatRequest):
-    """Non-streaming chat endpoint."""
     session_id = req.session_id or str(uuid.uuid4())
     if session_id not in conversations:
         conversations[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -375,10 +342,8 @@ async def chat_blocking(req: ChatRequest):
     conversations[session_id].append({"role": "assistant", "content": reply})
     return ChatResponse(reply=reply, session_id=session_id)
 
-
 @app.post("/stt", response_model=STTResponse)
 async def stt(req: STTRequest):
-    """Forward base64 audio to faster-whisper service."""
     resp = await http_client.post(
         f"{STT_URL}/transcribe-b64",
         json={"audio_b64": req.audio_b64, "language": "en"},
@@ -387,25 +352,26 @@ async def stt(req: STTRequest):
         raise HTTPException(status_code=502, detail=resp.text)
     return STTResponse(**resp.json())
 
-
 @app.post("/stt/file", response_model=STTResponse)
 async def stt_file(audio: UploadFile = File(...)):
     """Forward audio file to faster-whisper service."""
+    audio_bytes = await audio.read()
     async with http_client.stream(
         "POST",
         f"{STT_URL}/transcribe",
-        files={"audio": (audio.filename or "audio.wav", await audio.read(), "audio/wav")},
+        files={"audio": (audio.filename or "audio.wav", audio_bytes, audio.content_type or "audio/webm")},
         data={"language": "en"},
     ) as resp:
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail=await resp.aread())
         data = json.loads(await resp.aread())
-        return STTResponse(**data)
-
+        text = data.get("text", "")
+        if isinstance(text, bytes):
+            text = text.decode("utf-8")
+        return STTResponse(text=text)
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
-    """Forward text to piper TTS service, return audio stream."""
     cleaned_text = normalize_for_tts(req.text)
     resp = await http_client.post(
         f"{TTS_URL}/tts",
@@ -419,13 +385,10 @@ async def tts(req: TTSRequest):
         headers={"X-Audio-Length": str(len(resp.content))},
     )
 
-
 @app.delete("/session/{session_id}")
 async def delete_session(session_id: str):
-    """Clear conversation history for a session."""
     conversations.pop(session_id, None)
     return {"status": "deleted"}
-
 
 # ── Phase 3: Memory endpoints ──────────────────────────────────────────────
 @app.post("/memory/search")
@@ -433,22 +396,18 @@ async def search_memory(req: MemorySearchRequest):
     results = await memory_search(req.query, req.limit)
     return {"results": results}
 
-
 @app.post("/memory/store")
 async def store_memory(req: MemoryStoreRequest):
     result = await memory_store(req.text, req.tags)
     return {"status": result}
 
-
 @app.get("/memory/list")
 async def list_memory():
-    """List stored memories via memory-api."""
     try:
         resp = await http_client.get(f"{MEMORY_API_URL}/memories", timeout=5)
         return {"memories": resp.json()} if resp.status_code == 200 else {"error": resp.text}
     except Exception as e:
         return {"error": str(e)}
-
 
 @app.delete("/memory/{memory_id}")
 async def delete_memory(memory_id: str):
@@ -458,51 +417,37 @@ async def delete_memory(memory_id: str):
     except Exception as e:
         return {"error": str(e)}
 
-
 # ── Phase 4: Tool endpoints ────────────────────────────────────────────────
 @app.post("/tools/shell")
 async def tool_shell(req: ShellCommandRequest):
-    """Execute a shell command on aiclient."""
     result = await run_shell(req.command, req.timeout)
     return {"output": result}
 
-
 @app.post("/tools/docker")
 async def tool_docker(req: DockerCommandRequest):
-    """Execute a Docker command."""
     result = await docker_action(req.action, req.name_or_id, req.flags)
     return {"output": result}
 
-
 @app.post("/tools/file")
 async def tool_file(req: FileOperationRequest):
-    """Read, write, or list files."""
     result = await file_operation(req.action, req.path, req.content)
     return {"output": result}
 
-
 @app.post("/tools/homeassistant")
 async def tool_ha(req: HomeAssistantRequest):
-    """Interact with Home Assistant."""
     result = await ha_action(req.action, req.entity_id, req.value)
     return {"output": result}
 
-
 @app.post("/tools/memory/search")
 async def tool_memory_search(req: MemorySearchRequest):
-    """Search memory via tool endpoint."""
     result = await memory_search(req.query, req.limit)
     return {"output": result}
 
-
 # ── Phase 5: Multi-step task execution ─────────────────────────────────────
-# Active tasks: task_id -> {steps, current_step, status, output}
 active_tasks: dict[str, dict] = {}
-
 
 @app.post("/tasks/run")
 async def run_task(req: TaskRequest):
-    """Execute a multi-step task."""
     task_id = str(uuid.uuid4())[:8]
     active_tasks[task_id] = {
         "steps": req.steps,
@@ -513,17 +458,13 @@ async def run_task(req: TaskRequest):
     asyncio.create_task(_execute_task(task_id))
     return {"task_id": task_id, "total_steps": len(req.steps)}
 
-
 async def _execute_task(task_id: str):
-    """Background task executor."""
     task = active_tasks.get(task_id)
     if not task:
         return
-
     try:
         for i, step in enumerate(task["steps"]):
             task["current_step"] = i + 1
-            # Parse step: assume format "action: args"
             action = step.strip().split(":")[0].strip().lower()
             args = step.strip().split(":", 1)[-1].strip() if ":" in step else ""
 
@@ -541,22 +482,19 @@ async def _execute_task(task_id: str):
                 await asyncio.sleep(float(args) if args else 1)
                 result = f"Waited {args}s"
             elif action == "speak":
-                result = args  # Just record the speech, don't auto-speak
+                result = args
             else:
                 result = f"Unknown action: {action}"
 
             task["output"] += f"[Step {i+1}] {step}\n{result}\n\n"
-            await asyncio.sleep(0.1)  # Yield
-
+            await asyncio.sleep(0.1)
         task["status"] = "completed"
     except Exception as e:
         task["status"] = f"error: {e}"
         task["output"] += f"\nError: {e}\n"
 
-
 @app.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 async def task_status(task_id: str):
-    """Get task status."""
     task = active_tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -568,70 +506,47 @@ async def task_status(task_id: str):
         output=task["output"],
     )
 
-
 @app.delete("/tasks/{task_id}")
 async def cancel_task(task_id: str):
-    """Cancel a running task."""
     task = active_tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     task["status"] = "cancelled"
     return {"status": "cancelled"}
 
-
 # ── Phase 5: Proactive alerts ──────────────────────────────────────────────
-# Alert queue: list of {message, priority, scheduled_at}
 alert_queue: list[dict] = []
 alert_enabled = os.getenv("ALERTS_ENABLED", "false").lower() == "true"
 
-
 @app.post("/alerts/send")
 async def send_alert(message: dict = Body(...)):
-    """Queue an alert to be spoken."""
     alert = {
         "message": message.get("message", ""),
         "priority": message.get("priority", "normal"),
         "scheduled_at": time.time(),
     }
     alert_queue.append(alert)
-    if alert_enabled:
-        # Auto-speak high priority immediately
-        if alert["priority"] == "high":
-            asyncio.create_task(_speak_alert(alert["message"]))
+    if alert_enabled and alert["priority"] == "high":
+        asyncio.create_task(_speak_alert(alert["message"]))
     return {"queued": True}
 
-
 async def _speak_alert(text: str):
-    """Speak an alert through TTS."""
     try:
-        resp = await http_client.post(
-            f"{TTS_URL}/tts",
-            json={"text": text},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            # Audio would be played via desktop client or notification
-            pass
+        await http_client.post(f"{TTS_URL}/tts", json={"text": text}, timeout=10)
     except Exception:
         pass
 
-
 @app.get("/alerts/pending")
 async def pending_alerts():
-    """List pending alerts."""
     return {"alerts": alert_queue}
-
 
 @app.post("/alerts/clear")
 async def clear_alerts():
     alert_queue.clear()
     return {"cleared": True}
 
-
-
 @app.get("/debug/memory")
 async def debug_memory():
-    """Debug endpoint for memory service."""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -642,21 +557,16 @@ async def debug_memory():
     except Exception as e:
         return {"status": "error", "type": type(e).__name__, "message": str(e)}
 
-
 @app.post("/voice")
 async def voice_endpoint(audio: UploadFile = File(...)):
-    """Accept audio, transcribe, chat, return TTS audio."""
     try:
         audio_bytes = await audio.read()
-        print(f"[VOICE] Received {len(audio_bytes)} bytes from {audio.filename}")
-        
-        # 1. Transcribe - send as base64 via /stt-b64 or as file
+
         resp = await http_client.post(
             f"{STT_URL}/transcribe-b64",
             json={"audio_b64": base64.b64encode(audio_bytes).decode(), "language": "en"},
             headers={"Content-Type": "application/json"},
         )
-        print(f"[VOICE] STT response: {resp.status_code} {resp.text[:200]}")
         if resp.status_code != 200:
             return JSONResponse({"error": resp.text}, status_code=502)
         stt_data = resp.json()
@@ -664,7 +574,6 @@ async def voice_endpoint(audio: UploadFile = File(...)):
         if not user_text:
             return JSONResponse({"error": "No speech detected"}, status_code=400)
 
-        # 2. Chat (blocking)
         resp = await http_client.post(
             f"{LLAMA_URL}/v1/chat/completions",
             json={
@@ -682,12 +591,8 @@ async def voice_endpoint(audio: UploadFile = File(...)):
         if not reply:
             return JSONResponse({"error": "No reply"}, status_code=500)
 
-        # 3. TTS
         cleaned_reply = normalize_for_tts(reply)
-        resp = await http_client.post(
-            f"{TTS_URL}/tts",
-            json={"text": cleaned_reply},
-        )
+        resp = await http_client.post(f"{TTS_URL}/tts", json={"text": cleaned_reply})
         if resp.status_code != 200:
             return JSONResponse({"error": resp.text}, status_code=502)
 
@@ -701,7 +606,6 @@ async def voice_endpoint(audio: UploadFile = File(...)):
 
 @app.get("/health")
 async def health():
-    """Health check with upstream status."""
     status = {"status": "ok", "services": {}}
     for name, url in [
         ("llama", LLAMA_URL),
@@ -718,3 +622,261 @@ async def health():
             status["services"][name] = "unreachable"
     status["alerts_enabled"] = alert_enabled
     return status
+
+# ── iOS Shortcut endpoints ────────────────────────────────────────────────
+class VoiceB64Request(BaseModel):
+    audio_b64: str
+
+@app.post("/voice-b64")
+async def voice_b64(req: VoiceB64Request):
+    try:
+        audio_bytes = base64.b64decode(req.audio_b64)
+
+        resp = await http_client.post(
+            f"{STT_URL}/transcribe-b64",
+            json={"audio_b64": req.audio_b64, "language": "en"},
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        stt_data = resp.json()
+        user_text = stt_data.get("text", "")
+        if not user_text:
+            return JSONResponse({"error": "No speech detected"}, status_code=400)
+
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 2048,
+            },
+            headers=LLAMA_HEADERS,
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        assistant_text = resp.json()["choices"][0]["message"]["content"]
+
+        cleaned_text = normalize_for_tts(assistant_text)
+        tts_resp = await http_client.post(TTS_URL, json={"text": cleaned_text})
+        if tts_resp.status_code != 200:
+            return JSONResponse({"error": tts_resp.text}, status_code=502)
+
+        return Response(content=tts_resp.content, media_type="audio/wav")
+    except Exception as e:
+        import traceback
+        print(f"[VOICE-B64] Error: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/voice-shortcut")
+async def voice_shortcut(req: Request):
+    try:
+        audio_b64 = await req.body()
+        audio_b64 = audio_b64.decode('utf-8').strip()
+
+        resp = await http_client.post(
+            f"{STT_URL}/transcribe-b64",
+            json={"audio_b64": audio_b64, "language": "en"},
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        stt_data = resp.json()
+        user_text = stt_data.get("text", "")
+        if not user_text:
+            return JSONResponse({"error": "No speech detected"}, status_code=400)
+
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 2048,
+            },
+            headers=LLAMA_HEADERS,
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        assistant_text = resp.json()["choices"][0]["message"]["content"]
+
+        cleaned_text = normalize_for_tts(assistant_text)
+        tts_resp = await http_client.post(TTS_URL, json={"text": cleaned_text})
+        if tts_resp.status_code != 200:
+            return JSONResponse({"error": tts_resp.text}, status_code=502)
+
+        return Response(content=tts_resp.content, media_type="audio/wav")
+    except Exception as e:
+        import traceback
+        print(f"[VOICE-SHORTCUT] Error: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/voice-get")
+async def voice_get(audio_b64: str = Query(..., min_length=10)):
+    try:
+        resp = await http_client.post(
+            f"{STT_URL}/transcribe-b64",
+            json={"audio_b64": audio_b64, "language": "en"},
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        stt_data = resp.json()
+        user_text = stt_data.get("text", "")
+        if not user_text:
+            return JSONResponse({"error": "No speech detected"}, status_code=400)
+
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 2048,
+            },
+            headers=LLAMA_HEADERS,
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        assistant_text = resp.json()["choices"][0]["message"]["content"]
+
+        cleaned_text = normalize_for_tts(assistant_text)
+        tts_resp = await http_client.post(TTS_URL, json={"text": cleaned_text})
+        if tts_resp.status_code != 200:
+            return JSONResponse({"error": tts_resp.text}, status_code=502)
+
+        return Response(content=tts_resp.content, media_type="audio/wav")
+    except Exception as e:
+        import traceback
+        print(f"[VOICE-GET] Error: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/voice-b64-get")
+async def voice_b64_get(q: str = Query(..., min_length=10)):
+    try:
+        resp = await http_client.post(
+            f"{STT_URL}/transcribe-b64",
+            json={"audio_b64": q, "language": "en"},
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        stt_data = resp.json()
+        user_text = stt_data.get("text", "")
+        if not user_text:
+            return JSONResponse({"error": "No speech detected"}, status_code=400)
+
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 2048,
+            },
+            headers=LLAMA_HEADERS,
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        assistant_text = resp.json()["choices"][0]["message"]["content"]
+
+        cleaned_text = normalize_for_tts(assistant_text)
+        tts_resp = await http_client.post(TTS_URL, json={"text": cleaned_text})
+        if tts_resp.status_code != 200:
+            return JSONResponse({"error": tts_resp.text}, status_code=502)
+
+        return Response(content=tts_resp.content, media_type="audio/wav")
+    except Exception as e:
+        import traceback
+        print(f"[VOICE-B64-GET] Error: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/voice-raw")
+async def voice_raw(req: Request):
+    try:
+        audio_bytes = await req.body()
+        audio_b64 = base64.b64encode(audio_bytes).decode()
+
+        resp = await http_client.post(
+            f"{STT_URL}/transcribe-b64",
+            json={"audio_b64": audio_b64, "language": "en"},
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        stt_data = resp.json()
+        user_text = stt_data.get("text", "")
+        if not user_text:
+            return JSONResponse({"error": "No speech detected"}, status_code=400)
+
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 2048,
+            },
+            headers=LLAMA_HEADERS,
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        assistant_text = resp.json()["choices"][0]["message"]["content"]
+
+        cleaned_text = normalize_for_tts(assistant_text)
+        tts_resp = await http_client.post(TTS_URL, json={"text": cleaned_text})
+        if tts_resp.status_code != 200:
+            return JSONResponse({"error": tts_resp.text}, status_code=502)
+
+        return Response(content=tts_resp.content, media_type="audio/wav")
+    except Exception as e:
+        import traceback
+        print(f"[VOICE-RAW] Error: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/voice-b64-query")
+async def voice_b64_query(audio_b64: str = Query(..., min_length=10)):
+    try:
+        resp = await http_client.post(
+            f"{STT_URL}/transcribe-b64",
+            json={"audio_b64": audio_b64, "language": "en"},
+            headers={"Content-Type": "application/json"},
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        stt_data = resp.json()
+        user_text = stt_data.get("text", "")
+        if not user_text:
+            return JSONResponse({"error": "No speech detected"}, status_code=400)
+
+        resp = await http_client.post(
+            f"{LLAMA_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                "max_tokens": 2048,
+            },
+            headers=LLAMA_HEADERS,
+        )
+        if resp.status_code != 200:
+            return JSONResponse({"error": resp.text}, status_code=502)
+        assistant_text = resp.json()["choices"][0]["message"]["content"]
+
+        cleaned_text = normalize_for_tts(assistant_text)
+        tts_resp = await http_client.post(TTS_URL, json={"text": cleaned_text})
+        if tts_resp.status_code != 200:
+            return JSONResponse({"error": tts_resp.text}, status_code=502)
+
+        return Response(content=tts_resp.content, media_type="audio/wav")
+    except Exception as e:
+        import traceback
+        print(f"[VOICE-B64-QUERY] Error: {e}\n{traceback.format_exc()}")
+        return JSONResponse({"error": str(e)}, status_code=500)
