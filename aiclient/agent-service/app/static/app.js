@@ -136,8 +136,38 @@ async function speak(text) {
         source.connect(audioCtx.destination);
         source.start();
         source.onended = () => setStatus("Ready");
-    } catch (err) {
-        console.error("TTS error:", err);
+        return;
+    } catch (ctxErr) {
+        console.log("AudioContext decodeAudioData failed, trying Audio fallback:", ctxErr.message);
+    }
+    try {
+        const resp2 = await fetch("/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+        });
+        if (!resp2.ok) throw new Error("TTS HTTP " + resp2.status);
+        const blob = await resp2.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audio.onended = () => {
+            URL.revokeObjectURL(url);
+            setStatus("Ready");
+        };
+        audio.onerror = () => {
+            console.error("Audio element playback error");
+            URL.revokeObjectURL(url);
+            setStatus("Ready");
+        };
+        try {
+            await audio.play();
+        } catch (playErr) {
+            console.error("Audio.play() failed:", playErr);
+            URL.revokeObjectURL(url);
+            setStatus("Ready");
+        }
+    } catch (fallbackErr) {
+        console.error("TTS fallback also failed:", fallbackErr);
         setStatus("Ready");
     }
 }
