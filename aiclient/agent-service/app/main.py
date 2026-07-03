@@ -356,19 +356,18 @@ async def stt(req: STTRequest):
 async def stt_file(audio: UploadFile = File(...)):
     """Forward audio file to faster-whisper service."""
     audio_bytes = await audio.read()
-    async with http_client.stream(
-        "POST",
+    resp = await http_client.post(
         f"{STT_URL}/transcribe",
         files={"audio": (audio.filename or "audio.wav", audio_bytes, audio.content_type or "audio/webm")},
         data={"language": "en"},
-    ) as resp:
-        if resp.status_code != 200:
-            raise HTTPException(status_code=502, detail=await resp.aread())
-        data = json.loads(await resp.aread())
-        text = data.get("text", "")
-        if isinstance(text, bytes):
-            text = text.decode("utf-8")
-        return STTResponse(text=text)
+    )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=resp.text)
+    data = resp.json()
+    text = data.get("text", "")
+    if isinstance(text, bytes):
+        text = text.decode("utf-8")
+    return STTResponse(text=text)
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
