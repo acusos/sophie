@@ -879,3 +879,27 @@ async def voice_b64_query(audio_b64: str = Query(..., min_length=10)):
         import traceback
         print(f"[VOICE-B64-QUERY] Error: {e}\n{traceback.format_exc()}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+# ── VAD Control via webhook ────────────────────────────────────────────────
+
+vad_control_state = {"paused": False}
+
+class VADControlRequest(BaseModel):
+    action: str  # "pause" or "resume"
+
+@app.post("/v2/vad/control")
+async def vad_control(req: VADControlRequest):
+    """Control VAD state from external automation (e.g., iOS proximity sensor)."""
+    if req.action == "pause":
+        vad_control_state["paused"] = True
+        return {"status": "paused"}
+    elif req.action == "resume":
+        vad_control_state["paused"] = False
+        return {"status": "resumed"}
+    else:
+        return JSONResponse({"error": f"Unknown action: {req.action}"}, status_code=400)
+
+@app.get("/v2/vad/state")
+async def vad_state():
+    """Return current VAD control state for frontend polling."""
+    return {"paused": vad_control_state["paused"]}

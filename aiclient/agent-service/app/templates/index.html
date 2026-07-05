@@ -6,8 +6,11 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="format-detection" content="telephone=no">
+    <meta name="theme-color" content="#0f0f13">
+    <link rel="manifest" href="/static/manifest.json?v=1">
+    <link rel="icon" href="/static/icon-192.png" type="image/png">
     <title>Sophie</title>
-    <link rel="stylesheet" href="/static/style.css?v=4">
+    <link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body touch-action="none">
     <div class="container">
@@ -18,30 +21,27 @@
         <div class="message-area" id="messageArea">
             <div class="message assistant">
                 <div class="avatar">S</div>
-                <div class="bubble">Hi, I'm Sophie! You can type a message below, or hold the microphone button to speak.</div>
+                <div class="bubble">Hi, I'm Sophie! Tap "Speaker" to start listening hands-free.</div>
             </div>
         </div>
         <div class="input-area">
-            <div class="hands-free-row">
-                <button id="handsFreeToggle" class="hands-free-button" aria-label="Toggle hands-free mode">Hands-Free: OFF</button>
-            </div>
             <div class="text-input-row">
                 <input type="text" id="textInput" placeholder="Type a message..." class="text-input" />
                 <button id="sendBtn" class="send-button">Send</button>
             </div>
-            <button id="pttBtn" class="ptt-button" aria-label="Hold to speak">
+            <button id="pttBtn" class="ptt-button" aria-label="Toggle mic mode">
                 <svg class="mic-icon" viewBox="0 0 24 24" fill="currentColor" width="28" height="28">
                     <path d="M12 1a4 4 0 0 0-4 4v6a4 4 0 0 0 8 0V5a4 4 0 0 0-4-4z"/>
                     <path d="M19 11v2a7 7 0 0 1-14 0v-2" fill="none" stroke="currentColor" stroke-width="2"/>
                     <line x1="12" y1="18" x2="12" y2="23" stroke="currentColor" stroke-width="2"/>
                 </svg>
-                <span class="ptt-label">Hold to Speak</span>
+                <span class="ptt-label">Off</span>
             </button>
         </div>
         <div class="waveform" id="waveform">
             <canvas id="canvas"></canvas>
         </div>
     </div>
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=8"></script>
 </body>
 </html>

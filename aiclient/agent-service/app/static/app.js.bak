@@ -121,15 +121,6 @@ async function speak(text) {
     console.log("[SPEAK] text:", JSON.stringify(text));
     setStatus("Speaking", "speaking");
     vadEnabled = false;
-
-    // Skip TTS playback in earpiece mode
-    if (earpieceMode) {
-        console.log("[SPEAK] Earpiece mode — skipping TTS playback");
-        vadEnabled = true;
-        setStatus("Earpiece mode");
-        return;
-    }
-
     try {
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (audioCtx.state === "suspended") await audioCtx.resume();
@@ -253,120 +244,146 @@ async function runConversation(userAudioBlob) {
     }
 }
 
-/* ── Three-state button: Off → Speaker → Ear → Off ─── */
+async function startRecording() {
+    if (isRecording) return;
+    try {
+        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        chunks = [];
+        const mimeTypes = [
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/ogg;codecs=opus",
+            "audio/mp4",
+        ];
+        let selectedMime = "";
+        for (const m of mimeTypes) {
+            if (MediaRecorder.isTypeSupported(m)) { selectedMime = m; break; }
+        }
+        mediaRecorder = new MediaRecorder(audioStream, selectedMime ? { mimeType: selectedMime } : {});
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data && e.data.size > 0) chunks.push(e.data);
+        };
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(chunks, { type: selectedMime || "audio/webm" });
+            isRecording = false;
+            pttBtn.classList.remove("active");
+            pttBtn.querySelector(".ptt-label").textContent = "Hold to Speak";
+            stopAnalyser();
+            audioStream.getTracks().forEach(t => t.stop());
+            audioStream = null;
+            if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null; }
+            runConversation(blob);
+        };
+        mediaRecorder.start(100);
+        isRecording = true;
+        pttBtn.classList.add("active");
+        setStatus("Listening…", "listening");
+        startAnalyser(audioStream);
+        let elapsed = 0;
+        const label = pttBtn.querySelector(".ptt-label");
+        label.textContent = "Release";
+        recordingTimer = setInterval(() => {
+            elapsed++;
+            label.textContent = elapsed + "s";
+        }, 1000);
+    } catch (err) {
+        console.error("Recording error:", err);
+        setStatus(err.name === "NotAllowedError" ? "Mic access denied" : "Mic error: " + err.name, "error");
+    }
+}
 
-let vadState = "off";
-let earpieceMode = false;
+function stopRecording() {
+    if (!isRecording) return;
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+    mediaRecorder = null;
+}
+
+pttBtn.addEventListener("touchstart", (e) => { e.preventDefault(); startRecording(); }, { passive: false });
+pttBtn.addEventListener("touchend", (e) => { e.preventDefault(); stopRecording(); }, { passive: false });
+pttBtn.addEventListener("touchcancel", (e) => { e.preventDefault(); stopRecording(); }, { passive: false });
+
+pttBtn.addEventListener("mousedown", (e) => { e.preventDefault(); startRecording(); });
+pttBtn.addEventListener("mouseup", (e) => { e.preventDefault(); stopRecording(); });
+pttBtn.addEventListener("mouseleave", () => { if (isRecording) stopRecording(); });
+
+async function sendTextMessage() {
+    const userText = textInput.value.trim();
+    if (!userText) return;
+    textInput.value = "";
+    addMessage("user", userText);
+    const bubble = addStreamingMessage("assistant");
+    const reply = await chatStream(userText, bubble);
+    if (reply && reply.trim()) {
+        await speak(reply);
+    } else {
+        setStatus("Ready");
+    }
+}
+
+sendBtn.addEventListener("click", sendTextMessage);
+textInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendTextMessage(); });
+
+/* ── Hands-Free Voice Activity Detection ──────────────────────────────── */
+
 let handsFreeActive = false;
 let handsFreeStream = null;
 let handsFreeStreamForRec = null;
 let handsFreeMediaRecorder = null;
+let handsFreeChunks = [];
 let handsFreeAnalyser = null;
 let handsFreeAnimFrame = null;
 let isSpeechDetected = false;
 let vadEnabled = true;
 let silenceFrameCount = 0;
 
-const VAD_THRESHOLD = 0.001;
+const VAD_THRESHOLD = 0.001;        // energy threshold for speech detection
+const VAD_SILENCE_MS = 1000;       // ms of silence to consider speech ended
+const VAD_FRAME_MS = 20;           // analysis interval
 
-function setVadState(state) {
-    vadState = state;
-    const label = pttBtn.querySelector(".ptt-label");
-
-    if (state === "off") {
-        earpieceMode = false;
-        label.textContent = "Off";
-        pttBtn.classList.remove("active");
-        stopHandsFree();
-        setStatus("Ready");
-    } else if (state === "speaker") {
-        earpieceMode = false;
-        label.textContent = "Speaker";
-        pttBtn.classList.add("active");
-        if (!handsFreeActive) {
-            initHandsFree();
-        } else {
-            setStatus("Hands-free listening…", "listening");
-        }
-    } else if (state === "ear") {
-        earpieceMode = true;
-        label.textContent = "Ear";
-        pttBtn.classList.add("active");
-        if (!handsFreeActive) {
-            initHandsFree();
-        } else {
-            setStatus("Earpiece mode — listening", "listening");
-        }
-    }
-}
-
-function initHandsFree() {
+async function startHandsFree() {
+    if (handsFreeActive) return;
     try {
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        if (!handsFreeStream) {
-            console.log("[VAD] Requesting mic via getUserMedia");
-            navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
-                console.log("[VAD] Got mic stream");
-                handsFreeStream = stream;
-                handsFreeAnalyser = audioCtx.createAnalyser();
-                handsFreeAnalyser.fftSize = 512;
-                const source = audioCtx.createMediaStreamSource(stream);
-                source.connect(handsFreeAnalyser);
-                handsFreeStreamForRec = stream.clone();
-                handsFreeActive = true;
-                if (earpieceMode) {
-                    setStatus("Earpiece mode — listening", "listening");
-                } else {
-                    setStatus("Hands-free listening…", "listening");
-                }
-                vadLoop();
-            }).catch(function(err) {
-                console.error("[VAD] Mic denied:", err);
-                setStatus("Mic denied", "error");
-                vadState = "off";
-                pttBtn.querySelector(".ptt-label").textContent = "Off";
-                pttBtn.classList.remove("active");
-            });
-        } else {
-            console.log("[VAD] Reusing existing mic stream");
-            handsFreeAnalyser = audioCtx.createAnalyser();
-            handsFreeAnalyser.fftSize = 512;
-            const source = audioCtx.createMediaStreamSource(handsFreeStream);
-            source.connect(handsFreeAnalyser);
-            handsFreeStreamForRec = handsFreeStream.clone();
-            handsFreeActive = true;
-            if (earpieceMode) {
-                setStatus("Earpiece mode — listening", "listening");
-            } else {
-                setStatus("Hands-free listening…", "listening");
-            }
-            vadLoop();
-        }
+        if (audioCtx.state === "suspended") await audioCtx.resume();
+        handsFreeStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        handsFreeAnalyser = audioCtx.createAnalyser();
+        handsFreeAnalyser.fftSize = 512;
+        const source = audioCtx.createMediaStreamSource(handsFreeStream);
+        source.connect(handsFreeAnalyser);
+        // Clone stream for MediaRecorder - iOS can't share stream between AnalyserNode and MediaRecorder
+        handsFreeStreamForRec = handsFreeStream.clone();
+        handsFreeActive = true;
+        document.getElementById("handsFreeToggle").textContent = "Hands-Free: ON";
+        document.getElementById("handsFreeToggle").classList.add("active");
+        setStatus("Hands-free listening…", "listening");
+        vadLoop();
     } catch (err) {
-        console.error("[VAD] initHandsFree error:", err);
+        console.error("Hands-free mic error:", err);
+        addMessage("assistant", "Error: " + String(err));
         setStatus("Mic denied", "error");
-        vadState = "off";
-        pttBtn.querySelector(".ptt-label").textContent = "Off";
-        pttBtn.classList.remove("active");
     }
 }
 
 function stopHandsFree() {
     handsFreeActive = false;
-    if (handsFreeAnimFrame) { clearTimeout(handsFreeAnimFrame); handsFreeAnimFrame = null; }
+    if (handsFreeAnimFrame) { cancelAnimationFrame(handsFreeAnimFrame); handsFreeAnimFrame = null; }
     if (handsFreeMediaRecorder) {
         if (handsFreeMediaRecorder.state !== "inactive") handsFreeMediaRecorder.stop();
         handsFreeMediaRecorder = null;
     }
+    if (handsFreeStream) {
+        handsFreeStream.getTracks().forEach(t => t.stop());
+        handsFreeStream = null;
+    }
     isSpeechDetected = false;
-    chunks = [];
+    handsFreeChunks = [];
+    document.getElementById("handsFreeToggle").textContent = "Hands-Free: OFF";
+    document.getElementById("handsFreeToggle").classList.remove("active");
+    setStatus("Ready");
 }
 
 function vadLoop() {
     if (!handsFreeActive) return;
-
-    // VAD always runs in both Speaker and Ear modes
-    // earpieceMode only affects TTS playback in speak()
     if (!vadEnabled) {
         handsFreeAnimFrame = setTimeout(vadLoop, 30);
         return;
@@ -404,11 +421,12 @@ function vadLoop() {
 
     handsFreeAnimFrame = setTimeout(vadLoop, 30);
 }
-
 function startHandsFreeRecording() {
-    if (handsFreeMediaRecorder && handsFreeMediaRecorder.state !== "inactive") return;
+    if (handsFreeMediaRecorder && handsFreeMediaRecorder.state !== "inactive") {
+        return;
+    }
 
-    chunks = [];
+    chunks = [];  // reuse the existing chunks array
     const mimeTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
     let selectedMime = "";
     for (const m of mimeTypes) {
@@ -444,51 +462,13 @@ function stopHandsFreeRecording() {
     }
 }
 
-/* ── Button handler ─── */
-
-function cycleVadState() {
-    if (vadState === "off") {
-        setVadState("speaker");
-    } else if (vadState === "speaker") {
-        setVadState("ear");
-    } else {
-        setVadState("off");
-    }
-}
-
-pttBtn.addEventListener("click", (e) => { e.preventDefault(); cycleVadState(); });
-pttBtn.addEventListener("touchstart", (e) => { e.preventDefault(); cycleVadState(); }, { passive: false });
-
-/* ── Visibility change ─── */
-
-document.addEventListener("visibilitychange", async () => {
-    if (document.hidden) {
+const toggleBtn = document.getElementById("handsFreeToggle");
+if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
         if (handsFreeActive) {
             stopHandsFree();
-            setStatus("Paused (tab hidden)");
+        } else {
+            startHandsFree();
         }
-    } else {
-        if (vadState !== "off") {
-            initHandsFree();
-        }
-    }
-});
-
-/* ── Text input ─── */
-
-async function sendTextMessage() {
-    const userText = textInput.value.trim();
-    if (!userText) return;
-    textInput.value = "";
-    addMessage("user", userText);
-    const bubble = addStreamingMessage("assistant");
-    const reply = await chatStream(userText, bubble);
-    if (reply && reply.trim()) {
-        await speak(reply);
-    } else {
-        setStatus("Ready");
-    }
+    });
 }
-
-sendBtn.addEventListener("click", sendTextMessage);
-textInput.addEventListener("keydown", (e) => { if (e.key === "Enter") sendTextMessage(); });
