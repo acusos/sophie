@@ -41,6 +41,18 @@ services:
       - /dev/snd:/dev/snd
     restart: unless-stopped
 
+
+  # SearXNG — self-hosted search engine (no API key)
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      SEARXNG_SETTINGS_PATH: "/etc/searxng/settings.yml"
+      SEARXNG_BASE_URL: "http://localhost:8888/"
+    restart: unless-stopped
   # Desktop Voice Client — continuous listening loop
   # Run manually: docker compose run --rm desktop-client
   desktop-client:

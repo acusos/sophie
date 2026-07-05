@@ -228,6 +228,19 @@ def detect_tool_use(message: str):
         action = "list" if "list" in msg.split()[0] else "read"
         return "file", f"{action}:{m.group(1).strip()}"
     
+    # Web search: "search the web for X" or "search: X"
+    m = re.search(r"\b(?:search(?: the web)?|web search)\b\s*(?:for|about)?\s*(.+)$", msg)
+    if m:
+        return "web_search", m.group(1).strip()
+
+    # Task (multi-step): "task: shell:ls, shell:pwd"
+    m = re.search(r"\btask\b\s*:\s*(.+)$", msg)
+    if m:
+        steps_str = m.group(1).strip()
+        steps = [s.strip() for s in re.split(r'[;,]', steps_str) if s.strip()]
+        if steps:
+            return "task", steps
+
     # Memory
     m = re.search(r"(?:what do you remember|what did i tell you|what do you know)\s+(?:about|on)?\s*(.+)$", msg)
     if m:
@@ -249,7 +262,57 @@ async def call_tool(tool_name, params):
         return await file_operation(parts[0], parts[1] if len(parts) > 1 else "/home")
     elif tool_name == "memory_search":
         return await memory_search(params)
+    elif tool_name == "task":
+        return await run_task_from_chat(params)
+    elif tool_name == "web_search":
+        return await web_search(params)
     return f"Unknown tool: {tool_name}"
+
+# ── Tool: Task Runner ──────────────────────────────────────────────────────
+async def run_task_from_chat(steps: list[str]) -> str:
+    """Run a multi-step task and return output."""
+    task_id = str(uuid.uuid4())[:8]
+    active_tasks[task_id] = {
+        "steps": steps,
+        "current_step": 0,
+        "status": "running",
+        "output": "",
+    }
+    await _execute_task(task_id)
+    task = active_tasks.get(task_id, {})
+    return f"Task {task_id} {task.get('status', 'unknown')}:\n{task.get('output', '')}"
+
+# ── Tool: Web Search ───────────────────────────────────────────────────────
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://127.0.0.1:8888")
+
+async def web_search(query: str) -> str:
+    """Search the web via SearXNG API and return results."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            resp = await client.get(
+                f"{SEARXNG_URL}/search",
+                params={
+                    "q": query,
+                    "format": "json",
+                    "language": "en",
+                    "engines": "google,bing,duckduckgo",
+                },
+            )
+            if resp.status_code != 200:
+                return f"Search failed: HTTP {resp.status_code}"
+            data = resp.json()
+            results = data.get("results", [])[:5]
+            if not results:
+                return f"No results found for: {query}"
+            output = []
+            for i, r in enumerate(results, 1):
+                title = r.get("title", "N/A")
+                url = r.get("url", "N/A")
+                snippet = r.get("content", "")[:200]
+                output.append(f"[{i}] {title} - {url}\n{snippet}")
+            return "\n\n".join(output)
+        except Exception as e:
+            return f"Search error: {e}"
 
 # ── Tool: Memory ───────────────────────────────────────────────────────────
 async def memory_search(query: str, limit: int = 5) -> str:
@@ -529,6 +592,14 @@ async def tool_ha(req: HomeAssistantRequest):
 @app.post("/tools/memory/search")
 async def tool_memory_search(req: MemorySearchRequest):
     result = await memory_search(req.query, req.limit)
+    return {"output": result}
+
+class WebSearchRequest(BaseModel):
+    query: str
+
+@app.post("/tools/web/search")
+async def tool_web_search(req: WebSearchRequest):
+    result = await web_search(req.query)
     return {"output": result}
 
 # ── Phase 5: Multi-step task execution ─────────────────────────────────────
