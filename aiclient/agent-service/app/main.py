@@ -206,13 +206,16 @@ async def memory_search(query: str, limit: int = 5) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.post(
-                f"{MEMORY_API_URL}/api/search",
-                json={"query": query, "limit": limit},
+                f"{MEMORY_API_URL}/api/enrich",
+                json={"prompt": query, "conversation_id": None},
             )
             if resp.status_code != 200:
                 return "Memory search failed"
-            results = resp.json()
-            return "\n".join(f"- {r.get('content', '')}" for r in results[:limit] if r.get("content"))
+            data = resp.json()
+            enriched = data.get("enriched_prompt", "")
+            if data.get("context_used"):
+                return enriched
+            return ""
         except Exception:
             return "Memory service unavailable"
 
@@ -220,10 +223,12 @@ async def memory_store(text: str, tags: list[str] = None) -> str:
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
             resp = await client.post(
-                f"{MEMORY_API_URL}/api/store",
-                json={"text": text, "tags": tags or []},
+                f"{MEMORY_API_URL}/api/push",
+                json={"text": text, "category": (tags or ["general"])[0]},
             )
-            return "Stored" if resp.status_code == 200 else resp.text[:256]
+            if resp.status_code == 200:
+                return "Stored"
+            return resp.text[:256]
         except Exception:
             return "Memory service unavailable"
 
@@ -238,26 +243,29 @@ async def chat(req: ChatRequest):
         conversations[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     # Retrieve relevant memory
+    memory_context = ""
     try:
         resp = await http_client.post(
-            f"{MEMORY_API_URL}/api/search",
-            json={"query": req.message, "limit": 5},
+            f"{MEMORY_API_URL}/api/enrich",
+            json={"prompt": req.message, "conversation_id": session_id},
             timeout=5.0,
         )
         if resp.status_code == 200:
-            memory_results = resp.json()
-            if memory_results:
-                memory_context = "\n".join(
-                    f"- {m.get('content', '')}" for m in memory_results if m.get("content")
-                )
-                if memory_context.strip():
-                    conversations[session_id][0]["content"] += (
-                        f"\n\nRelevant memories:\n{memory_context}"
-                    )
+            data = resp.json()
+            enriched = data.get("enriched_prompt", "")
+            if data.get("context_used") and enriched.strip():
+                context_part = enriched.rsplit(req.message, 1)[0].strip() if req.message in enriched else enriched
+                if context_part.strip():
+                    memory_context = context_part
     except Exception:
         pass
 
-    conversations[session_id].append({"role": "user", "content": req.message})
+    # Inject memory context into the user message so the LLM can use it
+    user_message = req.message
+    if memory_context:
+        user_message = f"{memory_context}\n\n{req.message}"
+
+    conversations[session_id].append({"role": "user", "content": user_message})
 
     async def generate():
         payload = {
@@ -300,14 +308,36 @@ async def chat(req: ChatRequest):
             )
 
             try:
+                # Record user message
                 await http_client.post(
-                    f"{MEMORY_API_URL}/api/store",
+                    f"{MEMORY_API_URL}/api/record",
                     json={
-                        "user_message": req.message,
-                        "assistant_reply": full_reply,
-                        "session_id": session_id,
-                        "timestamp": time.time(),
+                        "conversation_id": session_id,
+                        "role": "user",
+                        "content": req.message,
+                        "model": "sophie",
+                        "token_counts": 0,
+                        "metadata_": {},
                     },
+                    timeout=5.0,
+                )
+                # Record assistant reply
+                await http_client.post(
+                    f"{MEMORY_API_URL}/api/record",
+                    json={
+                        "conversation_id": session_id,
+                        "role": "assistant",
+                        "content": full_reply,
+                        "model": "sophie",
+                        "token_counts": 0,
+                        "metadata_": {},
+                    },
+                    timeout=5.0,
+                )
+                # Push user message to memory
+                await http_client.post(
+                    f"{MEMORY_API_URL}/api/push",
+                    json={"text": req.message, "category": "conversation"},
                     timeout=5.0,
                 )
             except Exception:
@@ -403,18 +433,15 @@ async def store_memory(req: MemoryStoreRequest):
 @app.get("/memory/list")
 async def list_memory():
     try:
-        resp = await http_client.get(f"{MEMORY_API_URL}/memories", timeout=5)
+        resp = await http_client.get(f"{MEMORY_API_URL}/api/history", timeout=5)
         return {"memories": resp.json()} if resp.status_code == 200 else {"error": resp.text}
     except Exception as e:
         return {"error": str(e)}
 
 @app.delete("/memory/{memory_id}")
 async def delete_memory(memory_id: str):
-    try:
-        resp = await http_client.delete(f"{MEMORY_API_URL}/memories/{memory_id}", timeout=5)
-        return {"status": "deleted"} if resp.status_code == 200 else {"error": resp.text}
-    except Exception as e:
-        return {"error": str(e)}
+    """Memory service doesn't support individual deletion yet."""
+    return {"error": "Deletion not supported by memory service"}
 
 # ── Phase 4: Tool endpoints ────────────────────────────────────────────────
 @app.post("/tools/shell")
@@ -549,8 +576,8 @@ async def debug_memory():
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{MEMORY_API_URL}/api/search",
-                json={"query": "test", "limit": 5},
+                f"{MEMORY_API_URL}/api/enrich",
+                json={"prompt": "test", "conversation_id": None},
             )
             return {"status": "success", "code": resp.status_code, "data": resp.json()}
     except Exception as e:
@@ -903,3 +930,146 @@ async def vad_control(req: VADControlRequest):
 async def vad_state():
     """Return current VAD control state for frontend polling."""
     return {"paused": vad_control_state["paused"]}
+
+@app.get("/debug/memory-test")
+async def debug_memory_test():
+    """Debug: test what memory service returns for a query"""
+    try:
+        resp = await http_client.post(
+            f"{MEMORY_API_URL}/api/enrich",
+            json={"prompt": "Where do I live?", "conversation_id": None},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            enriched = data.get("enriched_prompt", "")
+            context_used = data.get("context_used", False)
+            # Show what context_part would be
+            query = "Where do I live?"
+            context_part = enriched.rsplit(query, 1)[0].strip() if query in enriched else enriched
+            return {
+                "raw_response": data,
+                "enriched": enriched,
+                "context_used": context_used,
+                "context_part": context_part,
+                "would_inject": bool(context_part.strip()),
+            }
+        return {"error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.get("/debug/chat-payload")
+async def debug_chat_payload():
+    """Debug: show what would be sent to LLM for a given query"""
+    from unittest.mock import AsyncMock
+    import asyncio
+    
+    async def simulate_chat(message: str, session_id: str):
+        # Simulate what /chat does
+        if session_id not in conversations:
+            conversations[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        
+        # Retrieve relevant memory
+        try:
+            resp = await http_client.post(
+                f"{MEMORY_API_URL}/api/enrich",
+                json={"prompt": message, "conversation_id": session_id},
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                enriched = data.get("enriched_prompt", "")
+                if data.get("context_used") and enriched.strip():
+                    context_part = enriched.rsplit(message, 1)[0].strip() if message in enriched else enriched
+                    if context_part.strip():
+                        conversations[session_id][0]["content"] += (
+                            f"\n{context_part}"
+                        )
+        except Exception as e:
+            print(f"Memory error: {e}")
+        
+        # Show the system message after memory injection
+        return {
+            "system_prompt": conversations[session_id][0]["content"],
+            "has_memory_context": "Relevant Context" in conversations[session_id][0]["content"],
+        }
+    
+    result = await simulate_chat("Where do I live?", "debug-chat-session")
+    return result
+
+@app.get("/debug/llm-payload")
+async def debug_llm_payload():
+    """Debug: show what would be sent to LLM"""
+    test_session = "debug-llm-payload-session"
+    
+    if test_session not in conversations:
+        conversations[test_session] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    
+    # Retrieve relevant memory
+    try:
+        resp = await http_client.post(
+            f"{MEMORY_API_URL}/api/enrich",
+            json={"prompt": "Where do I live?", "conversation_id": test_session},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            enriched = data.get("enriched_prompt", "")
+            if data.get("context_used") and enriched.strip():
+                context_part = enriched.rsplit("Where do I live?", 1)[0].strip() if "Where do I live?" in enriched else enriched
+                if context_part.strip():
+                    conversations[test_session][0]["content"] += (
+                        f"\n{context_part}"
+                    )
+    except Exception as e:
+        pass
+    
+    conversations[test_session].append({"role": "user", "content": "Where do I live?"})
+    
+    payload = {
+        "messages": conversations[test_session],
+        "stream": True,
+        "max_tokens": 2048,
+    }
+    
+    return {
+        "payload": payload,
+        "system_prompt_length": len(conversations[test_session][0]["content"]),
+    }
+
+@app.get("/debug/user-message")
+async def debug_user_message(query: str = "What is my name?"):
+    """Debug: show what user message is constructed for a given query"""
+    try:
+        resp = await http_client.post(
+            f"{MEMORY_API_URL}/api/enrich",
+            json={"prompt": query, "conversation_id": None},
+            timeout=5.0,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            enriched = data.get("enriched_prompt", "")
+            memory_context = ""
+            if data.get("context_used"):
+                marker = "--- Relevant Context ---"
+                if marker in enriched:
+                    memory_context = enriched.split(marker)[0].strip() + enriched.split(marker)[1]
+                else:
+                    memory_context = enriched
+                if enriched.endswith(query):
+                    memory_context = memory_context[:-len(query)].strip()
+                if memory_context and "Relevant Context" in memory_context:
+                    mem_start = memory_context.find("Memories:")
+                    if mem_start >= 0:
+                        memory_context = memory_context[mem_start:]
+            user_message = query
+            if memory_context:
+                user_message = f"[Remembered about you: {memory_context}]\n\n{query}"
+            return {
+                "raw_enriched": enriched,
+                "memory_context": memory_context,
+                "user_message": user_message,
+            }
+        return {"error": "No response"}
+    except Exception as e:
+        return {"error": str(e)}
