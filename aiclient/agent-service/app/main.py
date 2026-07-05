@@ -273,7 +273,7 @@ async def chat(req: ChatRequest):
         ) as resp:
             if resp.status_code != 200:
                 body = await resp.aread()
-                yield json.dumps({"error": body.decode(), "done": True})
+                yield json.dumps({"error": body.decode(), "done": True}) + "\n"
                 return
             full_reply = ""
             async for line in resp.aiter_lines():
@@ -291,7 +291,7 @@ async def chat(req: ChatRequest):
                     )
                     if delta:
                         full_reply += delta
-                        yield json.dumps({"token": delta, "partial": full_reply})
+                        yield json.dumps({"token": delta, "partial": full_reply}) + "\n"
                 except json.JSONDecodeError:
                     continue
 
@@ -313,7 +313,7 @@ async def chat(req: ChatRequest):
             except Exception:
                 pass
 
-            yield json.dumps({"done": True})
+            yield json.dumps({"done": True}) + "\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
