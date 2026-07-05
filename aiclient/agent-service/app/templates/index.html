@@ -7,7 +7,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="format-detection" content="telephone=no">
     <title>Sophie</title>
-    <link rel="stylesheet" href="/static/style.css?v=2">
+    <link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body touch-action="none">
     <div class="container">
@@ -22,6 +22,9 @@
             </div>
         </div>
         <div class="input-area">
+            <div class="hands-free-row">
+                <button id="handsFreeToggle" class="hands-free-button" aria-label="Toggle hands-free mode">Hands-Free: OFF</button>
+            </div>
             <div class="text-input-row">
                 <input type="text" id="textInput" placeholder="Type a message..." class="text-input" />
                 <button id="sendBtn" class="send-button">Send</button>
@@ -39,6 +42,6 @@
             <canvas id="canvas"></canvas>
         </div>
     </div>
-    <script src="/static/app.js?v=4"></script>
+    <script src="/static/app.js?v=6"></script>
 </body>
 </html>
