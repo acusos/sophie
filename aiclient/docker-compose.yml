@@ -8,6 +8,8 @@ services:
     ports:
       - "8090:8090"
     network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       LLAMA_URL: "http://192.168.20.116:8080"
       STT_URL: "http://192.168.20.116:8091"

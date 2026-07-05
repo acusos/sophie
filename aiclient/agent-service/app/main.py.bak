@@ -286,7 +286,7 @@ async def memory_store(text: str, tags: list[str] = None) -> str:
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/chat")
+@app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     session_id = req.session_id or str(uuid.uuid4())
     if session_id not in conversations:
@@ -310,22 +310,22 @@ async def chat(req: ChatRequest):
     except Exception:
         pass
 
-    # Detect and execute tools
-    tool_name, params = detect_tool_use(req.message)
-    tool_result_str = ""
-    if tool_name:
-        try:
-            tool_result = await call_tool(tool_name, params)
-            tool_result_str = f"TOOL_RESULT[{tool_name}]: {tool_result[:500]}"
-        except Exception as e:
-            tool_result_str = f"TOOL_ERROR[{tool_name}]: {e}"
-
     # Inject memory context into the user message so the LLM can use it
     user_message = req.message
     if memory_context:
-        user_message = f"{memory_context}\n\n{user_message}"
-    if tool_result_str:
-        user_message = tool_result_str + "\n\n" + user_message
+        user_message = f"{memory_context}\n\n{req.message}"
+
+    # Detect and execute tools
+    tool_name, params = detect_tool_use(req.message)
+    if tool_name:
+        try:
+            tool_result = await call_tool(tool_name, params)
+            # Inject tool result as system context
+            tool_msg = f"TOOL_RESULT[{tool_name}]: {tool_result[:500]}"
+            # Prepend to user message so LLM sees both the result and the query
+            req.message = tool_msg + "\n\nUser said: " + req.message
+        except Exception as e:
+            req.message = f"TOOL_ERROR[{tool_name}]: {e}\n\nUser said: " + req.message
 
     conversations[session_id].append({"role": "user", "content": user_message})
 
