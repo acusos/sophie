@@ -52,7 +52,7 @@ async def transcribe(
                 "start": seg.start,
                 "end": seg.end,
                 "text": seg.text.strip(),
-                "probability": seg.probability,
+                "probability": None,
             })
             full_text += seg.text.strip() + " "
         full_text = full_text.strip()
@@ -83,7 +83,7 @@ async def transcribe_b64(
                 "start": seg.start,
                 "end": seg.end,
                 "text": seg.text.strip(),
-                "probability": seg.probability,
+                "probability": None,
             })
             full_text += seg.text.strip() + " "
         full_text = full_text.strip()
