@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends alsa-utils portaudio19-dev && \
+    apt-get install -y --no-install-recommends build-essential alsa-utils portaudio19-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

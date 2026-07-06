@@ -1,12 +1,9 @@
-# ── Sophie Agent Services ──
+# Sophie Agent Services
 # Deploy to: aiclient (192.168.20.112)
 
 services:
-  # Agent Service — orchestrator, chat, STT/TTS proxy, web UI
   agent-service:
     build: ./agent-service
-    ports:
-      - "8090:8090"
     network_mode: host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -16,11 +13,17 @@ services:
       TTS_URL: "http://127.0.0.1:8092"
       MEMORY_API_URL: "http://127.0.0.1:8002"
       OPENWAKEWORD_URL: "http://127.0.0.1:8093"
+      ALERTS_ENABLED: "true"
+      EMAIL_GMAIL_ENABLED: "true"
+      EMAIL_GMAIL_USER: "kirbrit@gmail.com"
+      EMAIL_GMAIL_PASS: "5BarryStreet$"
+      EMAIL_OUTLOOK_ENABLED: "true"
+      EMAIL_OUTLOOK_USER: "isuspgr@hotmail.com"
+      EMAIL_OUTLOOK_PASS: "6JoynerAve$"
     depends_on:
       - piper-tts
     restart: unless-stopped
 
-  # Piper TTS — local, fast speech synthesis
   piper-tts:
     build: ./tts
     ports:
@@ -29,20 +32,17 @@ services:
       PIPER_MODEL: "/models/amy/en_US-amy-medium.onnx"
     restart: unless-stopped
 
-  # openWakeWord — wake word detection ("sophie")
   openwakeword:
     build: ./openwakeword
     ports:
       - "8093:8093"
     environment:
       WAKE_WORD: "sophie"
-      WAKE_THRESHOLD: "0.6"
+      WAKE_THRESHOLD: "0.8"
     devices:
       - /dev/snd:/dev/snd
     restart: unless-stopped
 
-
-  # SearXNG — self-hosted search engine (no API key)
   searxng:
     image: searxng/searxng:latest
     ports:
@@ -53,13 +53,13 @@ services:
       SEARXNG_SETTINGS_PATH: "/etc/searxng/settings.yml"
       SEARXNG_BASE_URL: "http://localhost:8888/"
     restart: unless-stopped
-  # Desktop Voice Client — continuous listening loop
-  # Run manually: docker compose run --rm desktop-client
+
   desktop-client:
     build: ./desktop-client
     environment:
       AGENT_URL: "http://127.0.0.1:8090"
       OPENWAKEWORD_URL: "http://127.0.0.1:8093"
+      ALERTS_ENABLED: "true"
     devices:
       - /dev/snd:/dev/snd
     network_mode: "host"

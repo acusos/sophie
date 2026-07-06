@@ -7,6 +7,7 @@ import uuid
 import time
 import subprocess
 import shlex
+from app.email_tool import check_email as email_check_tool, init_email
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -41,7 +42,17 @@ SYSTEM_PROMPT = os.getenv(
         "Keep responses concise and natural for spoken delivery. "
         "Use contractions and avoid overly formal language. "
         "When the user asks you to perform an action, use the tools "
-        "available to you. Speak naturally about what you're doing."
+        "available to you. Speak naturally about what you are doing. "
+        "You have these tools: shell commands, docker commands, file operations, "
+        "web search via SearXNG, memory search, and email checking, and time lookup. "
+        "Repos on aiclient are under /opt/ai/projects/ (currently only sophie is cloned). "
+        "If a tool fails, report the result directly and offer to fix it. "
+        "Always use 24-hour time format (e.g. 23:06 not 11:06 PM). When giving time or date, include both date and time in the reply. Never use emojis, emoji descriptions, or emoticons. Speak plainly. "
+        "Avoid markdown formatting, asterisks, and code blocks. Speak naturally. "
+        "NEVER close a conversation with phrases like anything else I can help with or "
+        "let me know if you need anything else. NEVER say hello or introduce yourself. "
+        "Just answer the question and stop. "
+        "Do not apologize for tool errors - just state what happened and move on."
     ),
 )
 
@@ -56,6 +67,7 @@ conversations: dict[str, list[dict]] = {}
 
 # Persistent HTTP client for upstream calls
 http_client = httpx.AsyncClient(timeout=120.0)
+init_email()
 
 LLAMA_HEADERS = {
     "Content-Type": "application/json",
@@ -156,6 +168,10 @@ async def docker_action(action: str, name: str = "", flags: str = "") -> str:
     return await run_shell(cmd, timeout=15)
 
 # ── Tool: Filesystem ───────────────────────────────────────────────────────
+async def get_time() -> str:
+    from datetime import datetime
+    now = datetime.now()
+    return f"Current time: {now.strftime('%A %B %d at %H:%M')} AEST."
 async def file_operation(action: str, path: str, content: str = "") -> str:
     p = Path(path).resolve()
     if not (str(p).startswith("/home") or str(p).startswith("/tmp")):
@@ -217,11 +233,30 @@ def detect_tool_use(message: str):
     if m:
         return "docker", f"{m.group(1)}:{m.group(2).strip()}"
     
+    # Shell with repo name: "check acusos git status"
+    m = re.search(r"\b(?:check|show)\b\s+(\w+)\s+(git\s+\w+.*)$", msg)
+    if m:
+        repo_name = m.group(1)
+        git_cmd = m.group(2)
+        return "shell", f"cd /opt/ai/projects/{repo_name} \\&\\& {git_cmd}"
     # Shell
-    m = re.search(r"\b(?:run|execute|do)\b\s+(.+)$", msg)
+    # Time: "what time is it", "what day is it", "what date is it"
+    m = re.search(r"\b(?:what\s+(?:time|day|date)|time|date)\b", msg)
+    if m:
+        return "get_time", None
+    # Email
+    m = re.search(r"\b(?:check|read|get|list|fetch)\s+(?:my )?(?:email|mail)\b(?:\s+(.+))?$", msg)
+    if m:
+        return "email_check", m.group(1).strip() if m.group(1) else None
+    m = re.search(r"\b(?:run|execute|do|check|show)\b\s+(.+)$", msg)
     if m:
         return "shell", m.group(1).strip()
     
+    # Time: "what time is it", "what day is it", "what date is it"
+    m = re.search(r"\b(?:what\s+(?:time|day|date)|time|date)\b", msg)
+    if m:
+        return "get_time", None
+    # Email
     # File
     m = re.search(r"\b(?:read|write|list|open|cat)\b\s+(?:file|the)?\s*(.+)$", msg)
     if m:
@@ -266,6 +301,10 @@ async def call_tool(tool_name, params):
         return await run_task_from_chat(params)
     elif tool_name == "web_search":
         return await web_search(params)
+    elif tool_name == "get_time":
+        return await get_time()
+    elif tool_name == "email_check":
+        return await email_check_tool(mailbox_name=params)
     return f"Unknown tool: {tool_name}"
 
 # ── Tool: Task Runner ──────────────────────────────────────────────────────
@@ -1206,3 +1245,78 @@ async def debug_user_message(query: str = "What is my name?"):
         return {"error": "No response"}
     except Exception as e:
         return {"error": str(e)}
+
+import asyncio
+import os
+
+# ── Phase 5: Background scheduler ──────────────────────────────────────────
+import subprocess
+
+async def _alert_scheduler():
+    """Enhanced background scheduler for proactive alerts."""
+    while True:
+        await asyncio.sleep(1800)  # Check every 30 minutes
+
+        # Time-based reminders
+        hour = datetime.now().hour
+        if hour == 9:
+            await send_alert({"message": "Good morning! Time to check your schedule.", "priority": "low"})
+        elif hour == 18:
+            await send_alert({"message": "Good evening! Time to review your day.", "priority": "low"})
+
+        # Disk space check
+        try:
+            result = subprocess.run(["df", "-h", "/"], capture_output=True, text=True)
+            for line in result.stdout.split("\n"):
+                if "/ " in line:
+                    usage = line.split()[4].replace("%", "")
+                    if int(usage) > 85:
+                        await send_alert({
+                            "message": f"Disk usage is {usage}% on root filesystem",
+                            "priority": "high" if int(usage) > 90 else "low"
+                        })
+                    break
+        except Exception:
+            pass
+
+        # Container health check
+        try:
+            result = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}} {{.Status}}"],
+                                   capture_output=True, text=True)
+            for line in result.stdout.split("\n"):
+                if "Exited" in line and "agent-service" in line:
+                    await send_alert({
+                        "message": f"Agent service appears to have exited: {line.strip()}",
+                        "priority": "high"
+                    })
+        except Exception:
+            pass
+
+        # Weather check (via SearXNG)
+        try:
+            weather_query = "current weather Newington NSW"
+            resp = await http_client.post(
+                "http://192.168.20.112:8888/search",
+                data={"q": weather_query, "format": "json"},
+                timeout=10.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = data.get("results", [])
+                for r in results[:1]:
+                    title = r.get("title", "")
+                    snippet = r.get("snippet", "")
+                    if "rain" in title.lower() or "rain" in snippet.lower():
+                        await send_alert({
+                            "message": f"Weather update: {title} - {snippet}",
+                            "priority": "low"
+                        })
+                        break
+        except Exception:
+            pass
+
+# Start the scheduler on startup
+@app.on_event("startup")
+async def start_scheduler():
+    if alert_enabled:
+        asyncio.create_task(_alert_scheduler())

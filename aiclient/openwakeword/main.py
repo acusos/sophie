@@ -1,20 +1,14 @@
 import asyncio
-import io
 import os
-import struct
 import numpy as np
 import sounddevice as sd
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-# openWakeWord model for "sophie"
-# This requires the model to be downloaded first
-WAKE_WORD = os.getenv("WAKE_WORD", "sophie")
-THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.6"))
+THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.7"))
 
-app = FastAPI(title="Sophie openWakeWord")
+app = FastAPI(title="Sophie VAD")
 
-# Track wake word detection state
 wake_detected = asyncio.Event()
 wake_detected.clear()
 listening = asyncio.Event()
@@ -26,7 +20,6 @@ class WakeWordStatus(BaseModel):
 
 @app.post("/detect", response_model=WakeWordStatus)
 async def detect():
-    """Check if wake word was detected (polling endpoint)."""
     status = wake_detected.is_set()
     if status:
         wake_detected.clear()
@@ -34,61 +27,61 @@ async def detect():
 
 @app.post("/start")
 async def start_listening():
-    """Start the continuous wake word listener."""
     if not listening.is_set():
-        asyncio.create_task(wake_word_loop())
+        asyncio.create_task(vad_loop())
         listening.set()
     return {"status": "listening"}
 
 @app.post("/stop")
 async def stop_listening():
-    """Stop the wake word listener."""
     listening.clear()
     return {"status": "stopped"}
 
 @app.get("/status", response_model=WakeWordStatus)
 async def status():
-    """Get current wake word detection status."""
     return WakeWordStatus(detected=wake_detected.is_set(), threshold=THRESHOLD)
 
 @app.get("/health")
 async def health():
     return {"status": "ok", "listening": listening.is_set()}
 
-async def wake_word_loop():
-    """Continuous loop to detect wake word from microphone."""
-    # Initialize openWakeWord detector
-    try:
-        from openwakeword import Detector
-        detector = Detector(wake_word_phrases=[WAKE_WORD], threshold=THRESHOLD)
-    except ImportError:
-        # Fallback: basic audio energy detection if openwakeword not available
-        detector = None
+async def vad_loop():
+    """Use Silero VAD to detect when someone is speaking,
+    then wait for a pause before triggering. This way Sophie
+    only responds to actual speech, not random sounds."""
+    from openwakeword import VAD
 
+    vad = VAD()
     SAMPLE_RATE = 16000
-    CHUNK = 1024
     CHANNELS = 1
+    FRAMES_PER_CHUNK = 256
+
+    speech_active = False
+    pause_counter = 0
+    PAUSE_THRESHOLD = 15  # ~1.5s of silence before triggering
 
     while listening.is_set():
         try:
-            # Read audio chunk from microphone
-            audio_data, _ = sd.read(CHUNK, samplerate=SAMPLE_RATE, channels=CHANNELS, dtype='float32')
-            
-            if detector is not None:
-                # Use openWakeWord detector
-                result = detector.predict(audio_data)
-                if result.get("probability", 0) >= THRESHOLD:
-                    wake_detected.set()
-            else:
-                # Fallback: simple energy-based detection
-                # This is a very basic approach - just detect speech presence
-                energy = np.mean(np.abs(audio_data))
-                if energy > 0.1:  # Simple threshold
-                    wake_detected.set()
-            
-        except Exception as e:
-            print(f"Wake word loop error: {e}")
-            break
+            audio_data, _ = sd.read(
+                FRAMES_PER_CHUNK,
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype='float32'
+            )
+            is_speech = vad.is_speech(audio_data)
 
-    # Clean up
-    detector = None
+            if is_speech:
+                speech_active = True
+                pause_counter = 0
+            else:
+                if speech_active:
+                    pause_counter += 1
+                    if pause_counter >= PAUSE_THRESHOLD:
+                        wake_detected.set()
+                        speech_active = False
+                        pause_counter = 0
+
+        except Exception as e:
+            print(f"VAD loop error: {e}")
+            await asyncio.sleep(1)
+            continue
