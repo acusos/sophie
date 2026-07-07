@@ -2,56 +2,56 @@
 
 Project: https://github.com/acusos/sophie
 Branch: master
-Date: 2026-07-06
+Last updated: 2026-07-06
 
 ## 1. Current State
 
 | Feature | Status |
 |---|---|
 | STT (faster-whisper) via /transcribe | Working |
-| LLM (Qwopus 3.6 27B Q4_K_S Coder MTP) streaming | Working |
+| LLM (Qwopus 3.6 27B Q4_K_S Coder MTP) streaming | Working — but ignores tool results (known issue) |
 | TTS (Piper) via /tts endpoint | Working |
 | Voice chat on PC browsers | Working |
 | Voice chat on iPhone Chrome (PTT + VAD) | Working |
 | Memory service wired | Working |
 | Tool calling (shell, docker, memory_search, web_search, email, time) | Working |
-| Web search (SearXNG) | Working |
-| Proactive alerts | Working |
-| Proactive alerts scheduler | Working |
-| Email checking (read-only) | Wired — needs credentials |
-| Time/date lookup | Working |
-| VAD-based activation (Silero) | Working — replaced openWakeWord with VAD |
+| Web search (SearXNG) | Working — Google + DuckDuckGo, 60s cache, 8s timeout |
+| Proactive alerts | Working — queue + TTS delivery |
+| Proactive alerts scheduler | Working — every 30 min |
+| Email checking (read-only) | Wired — needs App Passwords |
+| Time/date lookup | Working — 24-hour format, AEST |
+| VAD-based activation (Silero) | Working |
 
 ## 2. Architecture
 
 Servers:
-- aiclient (192.168.20.112) — Agent orchestrator, UI, TTS, VAD, memory service, SearXNG, alerts. SSH: me@aiclient
+- aiclient (192.168.20.112) — Agent orchestrator, UI, TTS, VAD, memory, SearXNG, alerts. SSH: me@aiclient
 - ai (192.168.20.116) — LLM (llama.cpp), STT, Qdrant. SSH: me@ai
 
 Ports:
 - aiclient:8090 — Agent Service (FastAPI)
 - aiclient:8002 — Memory service
 - aiclient:8092 — Piper TTS
-- aiclient:8093 — openWakeWord (now VAD-based)
+- aiclient:8093 — openWakeWord (VAD-based)
 - aiclient:8888 — SearXNG
-- ai:8080 — llama.cpp (Qwopus 3.6 27B Coder MTP)
+- ai:8080 — llama.cpp
 - ai:8091 — faster-whisper STT
 - ai:6333 — Qdrant
-- ai:11434 — Ollama (nomic-embed-text)
+- ai:11434 — Ollama
 
 ## 3. Codebase
 
-/opt/ai/projects/sophie/aiclient/ — aiclient project root (in git)
+/opt/ai/projects/sophie/aiclient/ — in git
   docker-compose.yml
-  agent-service/Dockerfile — includes ffmpeg, curl, git, docker CLI, timezone (AEST)
-  agent-service/app/main.py — FastAPI agent — chat, STT, TTS, tools, alerts, scheduler, time
-  agent-service/app/email_tool.py — Email IMAP tool (Gmail, Outlook)
+  agent-service/Dockerfile — ffmpeg, curl, git, docker CLI, TZ=AEST
+  agent-service/app/main.py — FastAPI agent
+  agent-service/app/email_tool.py — Email IMAP tool
   agent-service/app/HANDOVER.md — this file
   agent-service/app/static/app.js
   agent-service/app/static/style.css
   agent-service/app/templates/index.html
   tts/Dockerfile
-  openwakeword/Dockerfile, main.py — now uses Silero VAD instead of wake word
+  openwakeword/Dockerfile, main.py — Silero VAD
   searxng/settings.yml
   desktop-client/Dockerfile, main.py
 
@@ -66,74 +66,80 @@ Ports:
   docker-compose.yml
   faster-whisper/Dockerfile, main.py
 
-## 4. Services (systemd)
+## 4. Tool Detection Order
 
-| Server | Service | Path |
-|---|---|---|
-| aiclient | sophie.service | /etc/systemd/system/sophie.service |
-| ai | sophie.service | /etc/systemd/system/sophie.service |
+1. Time — what time, what day, what date
+2. Information questions — what is the price of X, tell me about X
+3. General questions — what is X, who is X, how to X -> web_search
+4. Email — check my email, read email
+5. Docker — docker ps, docker stop X
+6. Shell with repo — check acusos git status
+7. Shell — run X, check X, show X
+8. Web search — search for X
+9. Task — task: shell:ls
+10. Memory — what do you remember about X
+11. File — read file X
 
-## 5. Tool Detection Order
+## 5. Email Configuration
 
-detect_tool_use matches in this order (first match wins):
-1. Time — "what time", "what day", "what date", "time", "date"
-2. Email — "check my email", "read email from gmail", "fetch mail"
-3. Docker — "docker ps", "docker stop X"
-4. Shell with repo — "check acusos git status" -> cd /opt/ai/projects/acusos && git status
-5. Shell — "run X", "check X", "show X", "execute X", "do X"
-6. Web search — "search for X", "web search X"
-7. Task — "task: shell:ls, shell:pwd"
-8. Memory — "what do you remember about X"
-9. File — "read file X", "list file X"
+Email tool uses IMAP. Env vars in docker-compose.yml:
+EMAIL_GMAIL_ENABLED: true, EMAIL_GMAIL_USER, EMAIL_GMAIL_PASS
+EMAIL_OUTLOOK_ENABLED: true, EMAIL_OUTLOOK_USER, EMAIL_OUTLOOK_PASS
+Both require App Passwords if 2FA enabled.
 
-## 6. Email Configuration
+## 6. Time Tool
 
-Email tool uses IMAP via email_tool.py. Configure via env vars in docker-compose.yml:
+get_time() returns AEST, 24-hour format, date and time.
 
-EMAIL_GMAIL_ENABLED: "true"
-EMAIL_GMAIL_USER: "your-gmail@gmail.com"
-EMAIL_GMAIL_PASS: "app-password"
-EMAIL_OUTLOOK_ENABLED: "true"
-EMAIL_OUTLOOK_USER: "your-outlook@outlook.com"
-EMAIL_OUTLOOK_PASS: "app-password"
+## 7. Web Search
 
-Both Gmail and Outlook require App Passwords (not regular passwords) if 2FA is enabled.
+Engines: Google + DuckDuckGo only. Timeout: 8s. Cache: 60s TTL. Locale: en-AU.
 
-## 7. Time Tool
+## 8. System Prompt Enforces
 
-The get_time() function returns current date and time in AEST (Australia/Sydney).
-Always uses 24-hour format (e.g. 23:06 not 11:06 PM).
-Returns both date and time in replies.
+- Playful but professional personality
+- Brevity — 1-2 sentences
+- No greetings, no sign-offs
+- No terms of endearment
+- No emojis, no markdown
+- 24-hour time
+- No apologies for tool errors
 
-## 8. Key Decisions / History
+## 9. VAD Configuration
 
-- Qwopus 3.6 27B Coder MTP (Q4_K_S) — current LLM. Known to be verbose and sometimes ignore tool results.
-- faster-whisper model at /models/gguf/whisper/faster-whisper-large-v3-turbo/ on ai server
-- GPU memory issue resolved by --gpu-layers 1 on llama-cpp
-- docker-compose.yml — removed ports from agent-service (incompatible with network_mode: host)
-- desktop-client Dockerfile — added build-essential for pyaudio
-- Agent container now includes: ffmpeg, curl, git, docker CLI, timezone AEST
-- Email tool added (read-only Gmail + Outlook via IMAP)
-- Shell detection expanded to include "check", "show" keywords
-- System prompt updated with tool descriptions, repo paths, failure handling
-- openWakeWord replaced with Silero VAD for speech detection (no wake word needed)
-- Time tool added with 24-hour format
-- System prompt enforces: no greetings, no sign-offs, no emojis, no markdown, 24-hour time
+Silero VAD. Min speech: 30 frames. Pause: 40 frames. Cooldown: 60 frames.
+Frontend threshold: 0.005. Silence threshold: 60 frames.
 
-## 9. What Needs to Be Done
+## 10. What Needs to Be Done
 
 High Priority:
-- Replace Qwopus with two models: one instruct (conversation) and one coder (tool calling)
-- Fix SearXNG weather check retry mechanism (may fail on startup)
-- Configure email credentials (App Passwords for Gmail/Outlook)
+- Replace Qwopus with instruct model (root cause of tool result ignoring)
+- Fix SearXNG weather check retry
+- Configure email App Passwords
 
 Medium Priority:
-- Extend alert scheduler — more triggers (reminders, news, etc.)
-- Improve email tool — add reply capability
-- Auto-clone repos on request when user asks about missing repos
-- Calendar integration (Google Calendar, Outlook Calendar)
+- Telegram integration (repo: https://github.com/acusos/telegrambot)
+- iOS Shortcut Automation for VAD/Siri conflict
+- Auto-clone repos
+- Email reply capability
+- Calendar integration
 
-## 10. Files for Quick Review (Batch)
+Low Priority:
+- Extend alert scheduler
+- SMS via Twilio
+
+## 11. Known Issues
+
+- Qwopus ignores TOOL_RESULT injection
+- Qwopus is verbose with tool results
+- SearXNG weather check may fail on startup
+- Email needs App Passwords
+
+## 12. Golden Rule
+
+PC browsers working — test /chat and VAD changes against PC Chrome first.
+
+## 13. Files for Quick Review
 
 cat /opt/ai/projects/sophie/aiclient/agent-service/app/main.py
 cat /opt/ai/projects/sophie/aiclient/agent-service/app/email_tool.py
@@ -161,20 +167,21 @@ ls -la /models/gguf/whisper/
 docker ps
 git status
 
-## 11. SSH / Access
+## 14. SSH
 
 ssh me@aiclient -> aiclient (192.168.20.112)
 ssh me@ai -> ai server (192.168.20.116)
 
-DO NOT use acusos@192.168.20.112 or acusos@192.168.20.116
+## 15. Session Summary
 
-## 12. Known Issues
-
-- SearXNG weather check may fail on startup — retry mechanism needed
-- Qwopus ignores context — known limitation of Coder model
-- Qwopus is verbose with tool results — reports them rather than processing them
-- Email tool needs App Passwords configured (Gmail + Outlook both require them with 2FA)
-
-## 13. Golden Rule
-
-PC browsers are working with the current code — any change to /chat or the VAD loop must be tested against PC Chrome first.
+1. Email tool added (email_tool.py)
+2. Time tool added (get_time())
+3. Shell detection expanded (check, show)
+4. Tool detection order fixed
+5. System prompt updated (playful, brief, no endearments)
+6. Git and docker CLI added to agent container
+7. TTS restarted
+8. openWakeWord replaced with Silero VAD
+9. Web search improved (cache, reduced engines, timeout)
+10. Timezone AEST added to agent container
+11. Information question detection added for natural queries
