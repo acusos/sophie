@@ -427,7 +427,25 @@ async def index(request: Request):
 async def chat(req: ChatRequest):
     session_id = req.session_id or str(uuid.uuid4())
     if session_id not in conversations:
-        conversations[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        # Load persistent memory context for this session
+        persistent_context = ""
+        try:
+            resp = await http_client.post(
+                f"{MEMORY_API_URL}/api/enrich",
+                json={"prompt": "What do you know about the user?", "conversation_id": session_id},
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                enriched = data.get("enriched_prompt", "")
+                if data.get("context_used") and enriched.strip():
+                    persistent_context = enriched.rstrip("What do you know about the user?").strip()
+        except Exception:
+            pass
+        system_prompt = SYSTEM_PROMPT
+        if persistent_context:
+            system_prompt = SYSTEM_PROMPT + f"\n\n{persistent_context}"
+        conversations[session_id] = [{"role": "system", "content": system_prompt}]
 
     # Retrieve relevant memory
     memory_context = ""
@@ -1327,28 +1345,33 @@ async def _alert_scheduler():
         except Exception:
             pass
 
-        # Weather check (via SearXNG)
-        try:
-            weather_query = "current weather Newington NSW"
-            resp = await http_client.post(
-                "http://192.168.20.112:8888/search",
-                data={"q": weather_query, "format": "json"},
-                timeout=10.0,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                results = data.get("results", [])
-                for r in results[:1]:
-                    title = r.get("title", "")
-                    snippet = r.get("snippet", "")
-                    if "rain" in title.lower() or "rain" in snippet.lower():
-                        await send_alert({
-                            "message": f"Weather update: {title} - {snippet}",
-                            "priority": "low"
-                        })
-                        break
-        except Exception:
-            pass
+        # Weather check (via SearXNG) with retry
+        weather_query = "current weather Newington NSW"
+        for attempt in range(1, 4):
+            try:
+                resp = await http_client.post(
+                    "http://192.168.20.112:8888/search",
+                    data={"q": weather_query, "format": "json"},
+                    timeout=10.0,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results = data.get("results", [])
+                    for r in results[:1]:
+                        title = r.get("title", "")
+                        snippet = r.get("snippet", "")
+                        if "rain" in title.lower() or "rain" in snippet.lower():
+                            await send_alert({
+                                "message": f"Weather update: {title} - {snippet}",
+                                "priority": "low"
+                            })
+                            break
+                    break
+                print(f"[Sched] Weather check attempt {attempt}: HTTP {resp.status_code}, retrying...")
+            except Exception as e:
+                print(f"[Sched] Weather check attempt {attempt}: {e}, retrying...")
+                if attempt < 3:
+                    await asyncio.sleep(5)
 
 # Start the scheduler on startup
 @app.on_event("startup")

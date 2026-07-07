@@ -16,10 +16,8 @@ services:
       ALERTS_ENABLED: "true"
       EMAIL_GMAIL_ENABLED: "true"
       EMAIL_GMAIL_USER: "kirbrit@gmail.com"
-      EMAIL_GMAIL_PASS: "5BarryStreet$"
       EMAIL_OUTLOOK_ENABLED: "true"
       EMAIL_OUTLOOK_USER: "isuspgr@hotmail.com"
-      EMAIL_OUTLOOK_PASS: "6JoynerAve$"
     depends_on:
       - piper-tts
     restart: unless-stopped
