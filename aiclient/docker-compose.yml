@@ -61,3 +61,11 @@ services:
     devices:
       - /dev/snd:/dev/snd
     network_mode: "host"
+  telegram-bot:
+    build: ./telegram-bot
+    network_mode: host
+    environment:
+      TELEGRAM_BOT_TOKEN: "8828982393:AAF-dnEfIob2gLjYN6y8LVUacjKrcfGf3hw"
+      TELEGRAM_AUTHORIZED_IDS: "7875283898"
+      SOPHIE_URL: "http://127.0.0.1:8090"
+    restart: unless-stopped
