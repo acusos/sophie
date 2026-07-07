@@ -267,7 +267,7 @@ let isSpeechDetected = false;
 let vadEnabled = true;
 let silenceFrameCount = 0;
 
-const VAD_THRESHOLD = 0.001;
+const VAD_THRESHOLD = 0.005;
 
 function setVadState(state) {
     vadState = state;
@@ -393,7 +393,7 @@ function vadLoop() {
     } else {
         if (isSpeechDetected) {
             silenceFrameCount++;
-            if (silenceFrameCount >= 30) {
+            if (silenceFrameCount >= 60) {
                 isSpeechDetected = false;
                 silenceFrameCount = 0;
                 setStatus("Processing...", "thinking");

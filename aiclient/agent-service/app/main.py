@@ -38,9 +38,11 @@ def normalize_for_tts(text: str) -> str:
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
     (
-        "You are Sophie, a warm and helpful personal voice assistant. "
-        "Keep responses concise and natural for spoken delivery. "
-        "Use contractions and avoid overly formal language. "
+        "You are Sophie, a playful and charming personal assistant. You are flirty, "
+        "teasing, and warm. You speak like a real person on a phone call. "
+        "Keep responses SHORT - one or two sentences max. "
+        "No paragraphs, no long explanations, no filler. "
+        "Use contractions and casual language. Be brief. Be playful but professional. No terms of endearment (sweetheart, darling, honey, etc.). "
         "When the user asks you to perform an action, use the tools "
         "available to you. Speak naturally about what you are doing. "
         "You have these tools: shell commands, docker commands, file operations, "
@@ -244,6 +246,15 @@ def detect_tool_use(message: str):
     m = re.search(r"\b(?:what\s+(?:time|day|date)|time|date)\b", msg)
     if m:
         return "get_time", None
+    # Information questions: "what is the price of X", "tell me about X"
+    m = re.search(r"\b(?:what\s+is|what\s+are|tell\s+me|find\s+out|look\s+up)\s+(?:the )?(?:current )?(?:price|cost|value|rate|info|details)(?:\s+of|\s+for|\s+about)\s+(.+)$", msg)
+    if m:
+        return "web_search", m.group(1).strip()
+
+    # General question that might need web search: "what is X", "who is X"
+    m = re.search(r"\b(?:what|who|where|how|when|why)\s+(?:is|are|was|were|can|could|should|do|did|does|has|have)\s+(?:the )?(.+)$", msg)
+    if m:
+        return "web_search", m.group(1).strip()
     # Email
     m = re.search(r"\b(?:check|read|get|list|fetch)\s+(?:my )?(?:email|mail)\b(?:\s+(.+))?$", msg)
     if m:
@@ -256,6 +267,15 @@ def detect_tool_use(message: str):
     m = re.search(r"\b(?:what\s+(?:time|day|date)|time|date)\b", msg)
     if m:
         return "get_time", None
+    # Information questions: "what is the price of X", "tell me about X"
+    m = re.search(r"\b(?:what\s+is|what\s+are|tell\s+me|find\s+out|look\s+up)\s+(?:the )?(?:current )?(?:price|cost|value|rate|info|details)(?:\s+of|\s+for|\s+about)\s+(.+)$", msg)
+    if m:
+        return "web_search", m.group(1).strip()
+
+    # General question that might need web search: "what is X", "who is X"
+    m = re.search(r"\b(?:what|who|where|how|when|why)\s+(?:is|are|was|were|can|could|should|do|did|does|has|have)\s+(?:the )?(.+)$", msg)
+    if m:
+        return "web_search", m.group(1).strip()
     # Email
     # File
     m = re.search(r"\b(?:read|write|list|open|cat)\b\s+(?:file|the)?\s*(.+)$", msg)
@@ -324,9 +344,22 @@ async def run_task_from_chat(steps: list[str]) -> str:
 # ── Tool: Web Search ───────────────────────────────────────────────────────
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://127.0.0.1:8888")
 
+# Simple in-memory cache for web search results (60 second TTL)
+_search_cache: dict[str, tuple[str, float]] = {}
+
 async def web_search(query: str) -> str:
-    """Search the web via SearXNG API and return results."""
-    async with httpx.AsyncClient(timeout=15.0) as client:
+    """Search the web via SearXNG API and return results. Caches for 60s."""
+    import time
+    now = time.time()
+    cache_key = query.lower().strip()
+
+    # Check cache
+    if cache_key in _search_cache:
+        result, ts = _search_cache[cache_key]
+        if now - ts < 60:
+            return result
+
+    async with httpx.AsyncClient(timeout=8.0) as client:
         try:
             resp = await client.get(
                 f"{SEARXNG_URL}/search",
@@ -334,7 +367,7 @@ async def web_search(query: str) -> str:
                     "q": query,
                     "format": "json",
                     "language": "en",
-                    "engines": "google,bing,duckduckgo",
+                    "engines": "google,duckduckgo",
                 },
             )
             if resp.status_code != 200:
@@ -349,7 +382,9 @@ async def web_search(query: str) -> str:
                 url = r.get("url", "N/A")
                 snippet = r.get("content", "")[:200]
                 output.append(f"[{i}] {title} - {url}\n{snippet}")
-            return "\n\n".join(output)
+            result_str = "\n\n".join(output)
+            _search_cache[cache_key] = (result_str, now)
+            return result_str
         except Exception as e:
             return f"Search error: {e}"
 

@@ -5,7 +5,7 @@ import sounddevice as sd
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.7"))
+THRESHOLD = float(os.getenv("WAKE_THRESHOLD", "0.8"))
 
 app = FastAPI(title="Sophie VAD")
 
@@ -46,9 +46,8 @@ async def health():
     return {"status": "ok", "listening": listening.is_set()}
 
 async def vad_loop():
-    """Use Silero VAD to detect when someone is speaking,
-    then wait for a pause before triggering. This way Sophie
-    only responds to actual speech, not random sounds."""
+    """Use Silero VAD to detect when someone is speaking.
+    Must detect speech for at least 1s before triggering."""
     from openwakeword import VAD
 
     vad = VAD()
@@ -57,8 +56,13 @@ async def vad_loop():
     FRAMES_PER_CHUNK = 256
 
     speech_active = False
+    speech_frames = 0
     pause_counter = 0
-    PAUSE_THRESHOLD = 15  # ~1.5s of silence before triggering
+    PAUSE_THRESHOLD = 40  # ~3s of silence before triggering
+    MIN_SPEECH_FRAMES = 30  # ~3s minimum speech detection
+    COOLDOWN_FRAMES = 60  # ~6s cooldown after each trigger
+
+    cooldown = 0
 
     while listening.is_set():
         try:
@@ -72,14 +76,20 @@ async def vad_loop():
 
             if is_speech:
                 speech_active = True
+                speech_frames += 1
                 pause_counter = 0
             else:
                 if speech_active:
                     pause_counter += 1
-                    if pause_counter >= PAUSE_THRESHOLD:
+                    if pause_counter >= PAUSE_THRESHOLD and speech_frames >= MIN_SPEECH_FRAMES and cooldown <= 0:
                         wake_detected.set()
                         speech_active = False
+                        speech_frames = 0
                         pause_counter = 0
+                        cooldown = COOLDOWN_FRAMES
+
+            if cooldown > 0:
+                cooldown -= 1
 
         except Exception as e:
             print(f"VAD loop error: {e}")

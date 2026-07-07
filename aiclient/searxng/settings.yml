@@ -2,8 +2,8 @@ use_default_settings: true
 
 search:
   safe_search: 0
-  autocomplete: ""
-  default_lang: "en"
+  autocomplete: "google"
+  default_lang: "en-AU"
   formats:
     - html
     - json
@@ -14,3 +14,17 @@ server:
   secret_key: "sophie-searxng-secret-key-2026"
   limiter: false
   image_proxy: false
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+
+enabled_default_engines:
+  - name: google
+  - name: duckduckgo
